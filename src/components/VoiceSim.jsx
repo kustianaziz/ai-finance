@@ -1,88 +1,140 @@
-import { useState, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthProvider';
 import { processVoiceInput } from '../utils/aiLogic';
+import { checkUsageLimit } from '../utils/subscriptionLogic';
 
 export default function VoiceSim() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  
-  const [status, setStatus] = useState('idle'); // idle | listening | processing | success
-  const [saving, setSaving] = useState(false);
-  
-  const [transcript, setTranscript] = useState('');
-  const [aiResults, setAiResults] = useState([]); // Perhatikan: Array (Plural)
 
+  // State
+  const [isListening, setIsListening] = useState(false);
+  const [transcript, setTranscript] = useState(''); // Teks hasil ucapan
+  const [status, setStatus] = useState('idle'); // idle, listening, processing, success
+  const [aiResult, setAiResult] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  // Ref untuk Speech Recognition
   const recognitionRef = useRef(null);
 
-  const startListening = () => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      alert("Browser tidak support Voice. Coba Chrome/Edge.");
+  useEffect(() => {
+    // Inisialisasi Speech API saat komponen dimuat
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const recognition = new SpeechRecognition();
+      
+      recognition.lang = 'id-ID'; // Bahasa Indonesia
+      recognition.continuous = true; // PENTING: Mic tetap nyala sampai tombol stop ditekan
+      
+      // --- PERUBAHAN PENTING DI SINI ---
+      // Matikan interimResults biar Android gak bingung dan bikin teks double
+      recognition.interimResults = false; 
+
+      recognition.onresult = (event) => {
+        // Ambil potongan teks TERAKHIR yang baru saja selesai diucapkan
+        const lastResultIndex = event.results.length - 1;
+        const transcriptChunk = event.results[lastResultIndex][0].transcript.trim();
+
+        // Gabungkan ke teks yang sudah ada di layar (Append)
+        if (transcriptChunk) {
+            setTranscript(prevText => {
+                // Kalau sebelumnya kosong, langsung isi. Kalau ada isinya, tambah spasi dulu.
+                return prevText ? `${prevText} ${transcriptChunk}` : transcriptChunk;
+            });
+        }
+      };
+
+      recognition.onerror = (event) => {
+        console.error('Speech Error:', event.error);
+        if (event.error === 'no-speech') {
+            return; // Abaikan error kalau cuma diam
+        }
+        setIsListening(false);
+      };
+
+      recognition.onend = () => {
+        // Kalau mati sendiri, update status UI
+        setIsListening(false);
+      };
+
+      recognitionRef.current = recognition;
+    } else {
+      alert("Browser/HP ini gak support fitur suara.");
+    }
+  }, []);
+
+  // --- 1. TOGGLE MIC (ON/OFF) ---
+  const toggleListening = async () => {
+    if (isListening) {
+      // STOP DENGAR
+      if (recognitionRef.current) recognitionRef.current.stop();
+      setIsListening(false);
+    } else {
+      // START DENGAR
+      // Cek Kuota Dulu
+      const limitCheck = await checkUsageLimit(user.id, 'VOICE');
+      if (!limitCheck.allowed) {
+        if(window.confirm(limitCheck.message + "\nMau upgrade sekarang?")) {
+            navigate('/upgrade');
+        }
+        return;
+      }
+
+      setTranscript(''); // Reset teks lama kalau mulai baru
+      setAiResult(null); // Reset hasil AI lama
+      setStatus('listening');
+      if (recognitionRef.current) recognitionRef.current.start();
+      setIsListening(true);
+    }
+  };
+
+  // --- 2. PROSES KE AI (MANUAL TRIGGER) ---
+  const handleProcessAI = async () => {
+    if (!transcript.trim()) {
+      alert("Belum ada suara yang masuk, Gan!");
       return;
     }
 
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'id-ID';
-    recognition.continuous = false;
-    
-    recognition.onstart = () => {
-      setStatus('listening');
-      setTranscript('');
-    };
+    // Stop mic kalau masih nyala
+    if (isListening) {
+      if (recognitionRef.current) recognitionRef.current.stop();
+      setIsListening(false);
+    }
 
-    recognition.onresult = (event) => {
-      const text = event.results[0][0].transcript;
-      setTranscript(text);
-      handleProcessAI(text);
-    };
-
-    recognition.onerror = (event) => {
-      console.error("Error Voice:", event.error);
-      setStatus('idle');
-      alert("Gagal mendengar. Coba lagi.");
-    };
-
-    recognition.start();
-    recognitionRef.current = recognition;
-  };
-
-  const handleProcessAI = async (textInput) => {
     setStatus('processing');
+
     try {
-      // Panggil AI (Sekarang balikan-nya Array)
-      const results = await processVoiceInput(textInput);
-      setAiResults(results);
+      const result = await processVoiceInput(transcript);
+      setAiResult(result);
       setStatus('success');
     } catch (error) {
-      alert("AI Pusing: " + error.message);
+      alert("Gagal memproses: " + error.message);
       setStatus('idle');
     }
   };
 
-  const handleSaveAll = async () => {
-    if (!user || aiResults.length === 0) return;
+  // --- 3. SIMPAN KE DATABASE ---
+  const handleSave = async () => {
+    if (!user || !aiResult) return;
     setSaving(true);
     
     try {
-      // Loop semua hasil deteksi AI
-      for (const txn of aiResults) {
-        
+      // Loop karena AI bisa balikin banyak transaksi sekaligus
+      for (const txn of aiResult) {
         // 1. Simpan Header
         const { data: headerData, error: headerError } = await supabase
           .from('transaction_headers')
-          .insert([
-            {
-              user_id: user.id,
-              merchant: txn.merchant,
-              total_amount: txn.total_amount,
-              type: txn.type,
-              category: txn.category,
-              receipt_url: `Voice: "${transcript}"`,
-              is_ai_generated: true
-            }
-          ])
+          .insert([{
+            user_id: user.id,
+            merchant: txn.merchant,
+            total_amount: txn.total_amount,
+            type: txn.type,
+            category: txn.category,
+            receipt_url: "Voice Input V3",
+            is_ai_generated: true
+          }])
           .select()
           .single();
 
@@ -100,116 +152,139 @@ export default function VoiceSim() {
           const { error: itemsError } = await supabase
             .from('transaction_items')
             .insert(itemsToInsert);
-            
+          
           if (itemsError) throw itemsError;
         }
       }
 
+      alert("Data berhasil disimpan! 🎉");
       navigate('/dashboard');
 
     } catch (error) {
+      console.error(error);
       alert('Gagal simpan: ' + error.message);
     } finally {
       setSaving(false);
     }
   };
 
-  const reset = () => {
-    setStatus('idle');
-    setAiResults([]);
-    setTranscript('');
-  };
-
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
+    <div className="flex flex-col h-screen bg-white relative">
       
       {/* HEADER */}
-      <div className="w-full px-6 py-6 flex items-center">
-        <button onClick={() => navigate('/dashboard')} className="flex items-center gap-2 text-gray-600 font-bold hover:text-brand-600 transition">
-          <div className="w-8 h-8 bg-white border border-gray-200 rounded-full flex items-center justify-center shadow-sm">←</div>
-          <span>Kembali</span>
+      <div className="p-6 flex items-center justify-between bg-white shadow-sm z-10">
+        <button onClick={() => navigate('/dashboard')} className="p-2 bg-gray-100 rounded-full text-gray-600">
+          ✕
         </button>
+        <h1 className="font-bold text-gray-800">Voice Input</h1>
+        <div className="w-8"></div>
       </div>
 
-      <div className="flex-1 flex flex-col items-center justify-center px-6 pb-20">
+      {/* CONTENT AREA */}
+      <div className="flex-1 p-6 flex flex-col items-center">
         
-        {/* IDLE & LISTENING & PROCESSING (Sama kayak dulu) */}
-        {status === 'idle' && (
-          <>
-            <div className="text-center mb-10">
-              <h2 className="text-2xl font-bold text-gray-800">Voice Input V2</h2>
-              <p className="text-gray-500 mt-2">Bisa multi-transaksi sekaligus!</p>
-              <p className="text-xs text-brand-500 mt-4 bg-brand-50 px-3 py-1 rounded-full inline-block mx-auto max-w-[250px]">
-                "Isi bensin 20 ribu di SPBU <br/> terus makan nasi goreng 15 ribu"
-              </p>
-            </div>
-            <button onClick={startListening} className="w-24 h-24 bg-brand-500 rounded-full shadow-xl flex items-center justify-center animate-bounce cursor-pointer hover:bg-brand-600 transition ring-4 ring-brand-100">
-              <span className="text-4xl">🎙️</span>
+        {/* VISUALISASI MIC */}
+        <div className="relative mb-8 mt-10">
+          {isListening && (
+            <div className="absolute inset-0 bg-brand-200 rounded-full animate-ping opacity-75"></div>
+          )}
+          <button 
+            onClick={toggleListening}
+            className={`relative z-10 w-24 h-24 rounded-full flex items-center justify-center text-4xl shadow-xl transition-all ${
+              isListening ? 'bg-red-500 text-white scale-110' : 'bg-brand-600 text-white hover:scale-105'
+            }`}
+          >
+            {isListening ? '⏹' : '🎙️'}
+          </button>
+        </div>
+
+        <p className="text-gray-500 text-sm mb-4 font-medium text-center">
+          {isListening ? 'Sedang mendengarkan... (Klik tombol merah untuk stop)' : 'Klik mic dan mulai bicara santai'}
+        </p>
+
+        {/* AREA TEKS (EDITABLE) */}
+        <div className="w-full bg-gray-50 p-4 rounded-2xl border border-gray-200 mb-6 flex-1 max-h-[200px] overflow-hidden flex flex-col">
+            <textarea 
+                className="w-full h-full bg-transparent outline-none text-gray-700 text-lg resize-none placeholder-gray-300"
+                placeholder='Contoh: "Beli nasi goreng 15 ribu sama es teh 5 ribu di warung pak kumis"'
+                value={transcript}
+                onChange={(e) => setTranscript(e.target.value)} // User bisa edit manual
+            ></textarea>
+        </div>
+
+        {/* TOMBOL PROSES (Hanya muncul kalau ada teks) */}
+        {transcript.length > 5 && status !== 'processing' && status !== 'success' && (
+            <button 
+                onClick={handleProcessAI}
+                className="w-full py-4 bg-gray-900 text-white rounded-xl font-bold text-lg shadow-lg hover:bg-black transition animate-fade-in-up"
+            >
+                ⚡ Proses Sekarang
             </button>
-          </>
         )}
 
-        {status === 'listening' && (
-          <div className="text-center">
-            <div className="w-24 h-24 bg-red-50 rounded-full flex items-center justify-center animate-pulse mx-auto mb-6 border-2 border-red-100"><span className="text-4xl">👂</span></div>
-            <p className="text-lg font-bold text-red-500">Mendengarkan...</p>
-          </div>
-        )}
-
+        {/* LOADING STATE */}
         {status === 'processing' && (
-          <div className="text-center">
-            <div className="w-20 h-20 border-4 border-brand-500 border-t-transparent rounded-full animate-spin mx-auto mb-6"></div>
-            <p className="text-brand-600 font-bold">AI sedang memilah transaksi...</p>
-            <p className="text-xs text-gray-400 mt-2 italic line-clamp-2">"{transcript}"</p>
-          </div>
+             <div className="text-center animate-pulse">
+                <p className="text-brand-600 font-bold text-lg">🤖 AI sedang berpikir...</p>
+                <p className="text-gray-400 text-xs">Menganalisa konteks & kategori</p>
+             </div>
         )}
-
-        {/* HASIL DETEKSI (Bisa Banyak Kartu) */}
-        {status === 'success' && (
-          <div className="w-full max-h-[70vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-bold text-gray-700">Terdeteksi: {aiResults.length} Transaksi</h3>
-              <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded font-bold">Gemini 1.5</span>
-            </div>
-
-            <div className="space-y-4 mb-6">
-              {aiResults.map((txn, idx) => (
-                <div key={idx} className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm relative overflow-hidden">
-                  <div className="absolute top-0 left-0 w-1 h-full bg-brand-500"></div>
-                  <div className="flex justify-between items-start mb-2">
-                    <div>
-                      <h4 className="font-bold text-gray-800">{txn.merchant}</h4>
-                      <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">{txn.category}</span>
-                    </div>
-                    <span className={`font-bold ${txn.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
-                      {txn.type === 'income' ? '+' : '-'} Rp {txn.total_amount.toLocaleString()}
-                    </span>
-                  </div>
-                  {/* List Item Kecil */}
-                  <div className="bg-gray-50 p-2 rounded text-xs space-y-1">
-                    {txn.items.map((item, i) => (
-                      <div key={i} className="flex justify-between text-gray-600">
-                        <span>{item.name}</span>
-                        <span>{item.price.toLocaleString()}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="flex gap-3 sticky bottom-0 bg-gray-50 pt-2">
-              <button onClick={reset} disabled={saving} className="flex-1 py-3 border border-gray-300 rounded-xl text-gray-600 font-bold hover:bg-gray-100">
-                Ulangi
-              </button>
-              <button onClick={handleSaveAll} disabled={saving} className="flex-1 py-3 bg-brand-500 text-white rounded-xl font-bold shadow-lg hover:bg-brand-600">
-                {saving ? 'Menyimpan...' : `Simpan Semua (${aiResults.length})`}
-              </button>
-            </div>
-          </div>
-        )}
-
       </div>
+
+      {/* HASIL AI & TOMBOL SIMPAN (Overlay Slide Up) */}
+      {status === 'success' && aiResult && (
+        <div className="absolute inset-0 bg-white z-20 flex flex-col animate-slide-up overflow-y-auto">
+           <div className="p-6 bg-brand-50 border-b border-brand-100">
+               <h2 className="font-bold text-brand-800 text-lg flex items-center gap-2">
+                   ✅ Hasil Deteksi
+               </h2>
+               <p className="text-xs text-brand-600">Cek dulu sebelum disimpan ya.</p>
+           </div>
+           
+           <div className="p-6 flex-1 space-y-4">
+              {aiResult.map((txn, idx) => (
+                  <div key={idx} className="bg-white border border-gray-200 shadow-sm rounded-xl p-4">
+                      <div className="flex justify-between items-start mb-2">
+                          <div>
+                              <p className="font-bold text-gray-800 text-lg">{txn.merchant || 'Tanpa Nama'}</p>
+                              <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${txn.type === 'income' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                  {txn.type === 'income' ? 'Pemasukan' : 'Pengeluaran'}
+                              </span>
+                          </div>
+                          <p className="font-bold text-xl text-brand-600">Rp {txn.total_amount.toLocaleString()}</p>
+                      </div>
+                      
+                      <div className="bg-gray-50 rounded-lg p-3 space-y-1">
+                          {txn.items.map((item, i) => (
+                              <div key={i} className="flex justify-between text-sm text-gray-600">
+                                  <span>{item.name}</span>
+                                  <span>{item.price.toLocaleString()}</span>
+                              </div>
+                          ))}
+                      </div>
+                  </div>
+              ))}
+           </div>
+
+           <div className="p-6 border-t border-gray-100 bg-white sticky bottom-0">
+               <div className="flex gap-3">
+                   <button 
+                     onClick={() => { setStatus('idle'); setTranscript(''); setAiResult(null); }}
+                     className="flex-1 py-3 border border-gray-300 text-gray-600 rounded-xl font-bold hover:bg-gray-50"
+                   >
+                     Ulang
+                   </button>
+                   <button 
+                     onClick={handleSave}
+                     disabled={saving}
+                     className="flex-[2] py-3 bg-brand-600 text-white rounded-xl font-bold shadow-lg hover:bg-brand-700"
+                   >
+                     {saving ? 'Menyimpan...' : 'Simpan Data ✅'}
+                   </button>
+               </div>
+           </div>
+        </div>
+      )}
     </div>
   );
 }

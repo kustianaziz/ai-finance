@@ -1,4 +1,6 @@
+import { useEffect } from 'react'; // 1. Tambah useEffect
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { App as CapacitorApp } from '@capacitor/app'; // 2. Tambah Import Capacitor
 import AuthProvider, { useAuth } from './context/AuthProvider';
 
 import LoginPage from './components/LoginPage';
@@ -6,10 +8,9 @@ import RegisterPage from './components/RegisterPage';
 import Dashboard from './components/Dashboard';
 import AnalyticsPage from './components/AnalyticsPage';
 import TransactionsPage from './components/TransactionsPage';
-// import SubscriptionPage from './components/SubscriptionPage'; // <-- Ini boleh dihapus kalau mau pakai UpgradePage yg baru
 import VoiceSim from './components/VoiceSim';
 import ScanSim from './components/ScanSim';
-import UpgradePage from './components/UpgradePage'; // <--- 1. TAMBAHKAN INI (Import file baru tadi)
+import UpgradePage from './components/UpgradePage'; 
 import AdminUsersPage from './components/AdminUsersPage';
 
 // Komponen Satpam (Cek Tiket)
@@ -22,6 +23,21 @@ const ProtectedRoute = ({ children }) => {
 };
 
 function App() {
+  
+  // 3. LOGIKA TOMBOL BACK ANDROID
+  useEffect(() => {
+    // Fungsi ini akan dijalankan saat aplikasi dibuka
+    CapacitorApp.addListener('backButton', ({ canGoBack }) => {
+      if (canGoBack) {
+        // Kalau ada history halaman sebelumnya, mundur satu langkah
+        window.history.back();
+      } else {
+        // Kalau sudah di halaman paling depan (Login/Dashboard), keluar aplikasi
+        CapacitorApp.exitApp();
+      }
+    });
+  }, []); // [] artinya cuma dijalankan sekali pas start
+
   return (
     <AuthProvider>
       <BrowserRouter>
@@ -37,13 +53,9 @@ function App() {
             <Route path="/transactions" element={<ProtectedRoute><TransactionsPage /></ProtectedRoute>} />
             <Route path="/admin" element={<ProtectedRoute><AdminUsersPage /></ProtectedRoute>} />
             
-            {/* Route Lama (Bisa dihapus kalau gak dipake) */}
-            {/* <Route path="/subscribe" element={<ProtectedRoute><SubscriptionPage /></ProtectedRoute>} /> */}
-
             <Route path="/voice" element={<ProtectedRoute><VoiceSim /></ProtectedRoute>} />
             <Route path="/scan" element={<ProtectedRoute><ScanSim /></ProtectedRoute>} />
             
-            {/* <--- 2. TAMBAHKAN BARIS INI (Daftarkan jalur /upgrade) */}
             <Route path="/upgrade" element={<ProtectedRoute><UpgradePage /></ProtectedRoute>} />
             
             {/* Catch-all: Kalau nyasar, lempar ke Login */}

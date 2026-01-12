@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ai-finance-proto</string>
+    <string name="title_activity_main">ai-finance-proto</string>
+    <string name="package_name">com.eduvizta.finance</string>
+    <string name="custom_url_scheme">com.eduvizta.finance</string>
+</resources>

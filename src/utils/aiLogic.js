@@ -1,131 +1,157 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-// ⚠️ PASTIKAN API KEY TETAP AMAN (Gunakan Key yang sudah valid)
-const API_KEY = "AIzaSyBcpX9sRJh50dO1TykYCZ3y5ACH6xkkzHs"; 
-
+const API_KEY = import.meta.env.VITE_GEMINI_API_KEY; 
 const genAI = new GoogleGenerativeAI(API_KEY);
 
-// --- FUNGSI PROSES SUARA (VOICE V3 - SMART GROUPING) ---
+// ABANG REQUEST TETAP PAKAI INI
+const MODEL_NAME = "gemini-2.5-flash"; 
+
+// --- FUNGSI VOICE ---
 export const processVoiceInput = async (text) => {
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+    const model = genAI.getGenerativeModel({ 
+        model: MODEL_NAME,
+        // OPTIMASI: Paksa output JSON langsung (Lebih Cepat & Stabil)
+        generationConfig: { responseMimeType: "application/json" }
+    });
     
     const prompt = `
-      Kamu adalah akuntan cerdas. Tugasmu mengubah ucapan user menjadi data transaksi JSON.
-      
-      Input User: "${text}"
-
-      ATURAN PENTING (LOGIKA PENGELOMPOKAN):
-      1. Jika user menyebutkan SATU Lokasi/Sumber (misal: "Belanja di Indomaret" atau "Pendapatan Toko Kelontong"), lalu diikuti daftar barang/item --> GABUNGKAN jadi 1 Transaksi dengan banyak 'items'. JANGAN DIPISAH!
-      2. Jika user menyebutkan DUA kejadian beda tempat/waktu (misal: "Beli bensin, TERUS makan siang") --> PISAHKAN jadi 2 Transaksi berbeda.
-      
-      Format Output JSON (Array of Objects):
-      [
-        {
-          "merchant": "Nama Toko/Sumber (Contoh: Toko Kelontong, Indomaret, Gaji)",
-          "total_amount": 0, // Total dari semua item (hitung sendiri jika user tidak sebut total)
-          "category": "Kategori (Makan, Belanja, Usaha, Transport, dll)",
-          "type": "expense" atau "income",
-          "items": [
-             { "name": "Nama Barang 1", "price": 10000 },
-             { "name": "Nama Barang 2", "price": 5000 }
-          ]
-        }
-      ]
-
-      Contoh Kasus:
-      - Input: "Pendapatan warung jual kopi 5rb sama gorengan 2rb"
-      - Output: 1 Transaksi (Merchant: Warung, Total: 7000, Items: [{Kopi, 5000}, {Gorengan, 2000}])
-
-      - Input: "Beli bensin 10rb terus beli rokok 20rb"
-      - Output: 2 Transaksi terpisah (karena tidak ada konteks satu toko yang jelas, kecuali dibilang 'di warkop beli bensin dan rokok').
-
-      Hasilkan HANYA JSON Array valid tanpa format markdown.
+    You are an expense tracker parser.
+    Input: "${text}"
+    Rule: Group items by location/merchant.
+    Output Schema: Array of objects [{ "merchant": string, "total_amount": number, "category": string, "type": "expense"|"income", "items": [{"name": string, "price": number}] }]
     `;
 
     const result = await model.generateContent(prompt);
-    const textResult = result.response.text().replace(/```json/g, "").replace(/```/g, "").trim();
-    
-    const parsed = JSON.parse(textResult);
-    return Array.isArray(parsed) ? parsed : [parsed];
+    // Karena sudah mode JSON, kita tidak perlu replace regex yang ribet
+    return JSON.parse(result.response.text());
 
   } catch (error) {
-    console.error("Error AI Voice:", error);
-    throw new Error("Gagal memproses suara.");
+    console.error("Voice Error:", error);
+    throw new Error("Gagal proses suara.");
   }
 };
 
-// --- FUNGSI VISION (Tetap sama, tidak perlu diubah) ---
+// --- FUNGSI VISION (SCAN) ---
 export const processImageInput = async (fileBase64, mimeType) => {
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+    const model = genAI.getGenerativeModel({ 
+        model: MODEL_NAME,
+        // OPTIMASI VITAL: Native JSON Mode ⚡
+        generationConfig: { 
+            responseMimeType: "application/json",
+            temperature: 0.2 // Suhu rendah biar AI gak halusinasi (lebih cepat mikir)
+        }
+    });
 
+    // Prompt Bahasa Inggris (Biasanya diproses lebih cepat oleh model daripada Indo)
+    // Tapi output tetap kita minta sesuai data struk
     const prompt = `
-      Analisa gambar struk/nota ini.
-      Ekstrak data: merchant, amount (total), category, type (expense/income), dan items (name, price).
-      Output HANYA JSON valid.
+    Analyze receipt image. Extract data strictly into this JSON structure:
+    {
+      "merchant": "Store Name",
+      "amount": Total Amount (number),
+      "category": "Food/Transport/Shopping/etc",
+      "type": "expense" or "income",
+      "items": [
+        { "name": "Item Name", "price": Item Price (number) }
+      ]
+    }
+    If detail items are unclear, guess based on total or leave empty.
     `;
-
-    const imagePart = {
-      inlineData: { data: fileBase64, mimeType: mimeType },
-    };
+    
+    const imagePart = { inlineData: { data: fileBase64, mimeType: mimeType } };
 
     const result = await model.generateContent([prompt, imagePart]);
-    const textResult = result.response.text().replace(/```json/g, "").replace(/```/g, "").trim();
     
-    return JSON.parse(textResult);
+    // Langsung Parse (Tanpa Regex Cleanup)
+    return JSON.parse(result.response.text());
+
   } catch (error) {
-    console.error("Error AI Vision:", error);
-    throw new Error("Gagal deteksi detail barang.");
+    console.error("Vision Error:", error);
+    if (error.message.includes("429")) throw new Error("Server Sibuk (Limit). Tunggu sebentar.");
+    throw new Error("Gagal analisa gambar. Coba foto ulang.");
   }
 };
 
-// --- FUNGSI ADVISOR KEUANGAN (NEW) ---
+// --- FUNGSI ADVISOR (OPTIMALISASI HITUNG DULUAN) ---
 export const generateFinancialInsights = async (transactions) => {
+  // 1. HITUNG MANUAL DI JAVASCRIPT (Super Cepat & Akurat)
+  // Jangan suruh AI ngitung, dia lambat & sering salah hitung.
+  
+  let totalIncome = 0;
+  let totalExpense = 0;
+  const categoryMap = {}; // Buat nyari kategori paling boros
+
+  transactions.forEach(t => {
+    if (t.type === 'income') {
+        totalIncome += t.total_amount;
+    } else {
+        totalExpense += t.total_amount;
+        // Rekap per kategori
+        categoryMap[t.category] = (categoryMap[t.category] || 0) + t.total_amount;
+    }
+  });
+
+  // Cari biang kerok (Kategori Paling Boros)
+  let topCategory = "Tidak ada";
+  let topCategoryAmount = 0;
+  
+  for (const [cat, amount] of Object.entries(categoryMap)) {
+    if (amount > topCategoryAmount) {
+        topCategory = cat;
+        topCategoryAmount = amount;
+    }
+  }
+
+  const balance = totalIncome - totalExpense;
+  const statusKeuangan = balance >= 0 ? "AMAN (Surplus)" : "BAHAYA (Defisit/Boncos)";
+
+  // 2. SUSUN LAPORAN SINGKAT BUAT AI
+  // Kita cuma kirim teks pendek ini, jadi AI bacanya kilat! ⚡
+  const summaryContext = `
+    - Total Pemasukan: Rp ${totalIncome.toLocaleString('id-ID')}
+    - Total Pengeluaran: Rp ${totalExpense.toLocaleString('id-ID')}
+    - Sisa Saldo: Rp ${balance.toLocaleString('id-ID')}
+    - Status: ${statusKeuangan}
+    - Paling Boros di: ${topCategory} (Habis Rp ${topCategoryAmount.toLocaleString('id-ID')})
+  `;
+
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
-
-    // Ringkas data dulu biar prompt gak kepanjangan
-    const summary = transactions.map(t => 
-      `${t.date}: ${t.merchant || 'Umum'} (${t.category}) = ${t.type} Rp${t.total_amount}`
-    ).join('\n');
-
-    const prompt = `
-      Bertindaklah sebagai Konsultan Keuangan Pribadi yang cerdas, santai, dan to the point.
-      Analisa data transaksi user berikut ini:
-      
-      ${summary}
-
-      Tugasmu:
-      Berikan 3 (TIGA) Insight atau Saran Pendek yang sangat spesifik berdasarkan data di atas.
-      
-      Gaya Bahasa:
-      - Poin 1: Komentar soal kategori pengeluaran terbesar (Warning/Pujian).
-      - Poin 2: Analisa cash flow (Pemasukan vs Pengeluaran).
-      - Poin 3: Saran aksi nyata untuk minggu depan.
-      - Gunakan Bahasa Indonesia gaul tapi sopan.
-      - Panggil user dengan sebutan "Juragan".
-
-      Output HANYA JSON Array of Strings. Contoh:
-      [
-        "Waduh Juragan, jajan kopinya dikurangin dikit ya, udah abis 500rb tuh!",
-        "Cash flow aman, pemasukan bisnis lebih gede dari pengeluaran. Pertahankan!",
-        "Minggu depan coba bawa bekal aja biar hemat transport."
-      ]
-    `;
-
-    const result = await model.generateContent(prompt);
-    const textResult = result.response.text().replace(/```json/g, "").replace(/```/g, "").trim();
+    const model = genAI.getGenerativeModel({ 
+        model: MODEL_NAME, // Tetap Gemini 2.5
+        generationConfig: { 
+            responseMimeType: "application/json", // Output langsung JSON (Cepat)
+            temperature: 0.7 // Kreativitas sedang biar sarannya luwes
+        }
+    });
     
-    return JSON.parse(textResult);
+    // 3. PROMPT "JURAGAN" (Persona yang kuat)
+    const prompt = `
+    Berperanlah sebagai "Juragan", mentor keuangan yang bicaranya santai, gaul (Indonesian slang), to the point, dan agak pedas kalau user boros.
+    
+    Laporan Keuangan User Bulan Ini:
+    ${summaryContext}
+
+    Berikan 3 saran singkat (Max 2 kalimat per saran) dalam format Array JSON:
+    1. [Evaluasi] Komentari status saldo (Puji kalau surplus, sindir kalau boncos).
+    2. [Sorotan] Bahas kenapa dia boros di "${topCategory}" dan kasih tips kurangi itu.
+    3. [Tantangan] Satu aksi nyata (Action Plan) yang harus dilakukan besok.
+
+    Output JSON Murni: ["Saran 1...", "Saran 2...", "Saran 3..."]
+    `;
+    
+    const result = await model.generateContent(prompt);
+    
+    // Karena Native JSON, gak perlu regex replace aneh-aneh
+    return JSON.parse(result.response.text());
 
   } catch (error) {
-    console.error("Error AI Insight:", error);
-    // Fallback kalau AI error/limit
+    console.error("Advisor Error:", error);
     return [
-      "Data keuanganmu sudah tercatat rapi.",
-      "Cek grafik analisa untuk detail lebih lengkap.",
-      "Tetap semangat mengatur keuangan, Juragan!"
+        "Waduh, Juragan lagi sibuk ngitung duit nih.",
+        "Coba cek koneksi internet kamu ya.",
+        "Intinya: Jangan besar pasak daripada tiang!"
     ];
   }
 };

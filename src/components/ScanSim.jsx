@@ -1,233 +1,239 @@
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthProvider';
 import { processImageInput } from '../utils/aiLogic';
-import { checkUsageLimit } from '../utils/subscriptionLogic'; // <-- IMPORT SATPAM
+import { checkUsageLimit } from '../utils/subscriptionLogic';
+
+// IMPORT PLUGIN KAMERA ASLI
+import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 
 export default function ScanSim() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const fileInputRef = useRef(null);
 
   const [status, setStatus] = useState('idle'); 
   const [imagePreview, setImagePreview] = useState(null);
   const [imageBase64, setImageBase64] = useState(null);
-  const [fileType, setFileType] = useState(null);
-  
   const [aiResult, setAiResult] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  // 1. Handle User Pilih Foto (DENGAN PENGECEKAN KUOTA)
-  const handleFileChange = async (e) => {
-    // --- CEK KUOTA DULU DISINI ---
+  // --- FUNGSI AMBIL FOTO (ULTRA FAST SETTINGS) ---
+  const handleNativeCamera = async (sourceMode) => {
+    // 1. Cek Kuota
     const limitCheck = await checkUsageLimit(user.id, 'SCAN');
-    
     if (!limitCheck.allowed) {
-      // Reset input file biar bisa diklik ulang nanti
-      if(fileInputRef.current) fileInputRef.current.value = "";
-      
-      const confirmUpgrade = window.confirm(limitCheck.message + "\n\nMau upgrade ke Sultan sekarang?");
-      if (confirmUpgrade) {
-          navigate('/upgrade');
-      }
-      return; // Stop proses, jangan lanjut scan
+      if (window.confirm(limitCheck.message + "\nMau upgrade sekarang?")) navigate('/upgrade');
+      return; 
     }
-    // ----------------------------
 
-    const file = e.target.files[0];
-    if (file) {
-      const url = URL.createObjectURL(file);
-      setImagePreview(url);
-      setFileType(file.type);
+    try {
+      // 2. Settingan Kamera
+      // Kita pakai width 500px (tengah-tengah) biar imbang antara speed & akurasi
+      const image = await Camera.getPhoto({
+        quality: 40,       // Kualitas 40% (Cukup)
+        allowEditing: false, 
+        resultType: CameraResultType.Base64, 
+        width: 500,        
+        source: sourceMode === 'camera' ? CameraSource.Camera : CameraSource.Photos,
+      });
+
+      // 3. Simpan data
+      // image.base64String sudah murni tanpa header 'data:image...'
+      setImageBase64(image.base64String);
+      setImagePreview(`data:image/jpeg;base64,${image.base64String}`);
+      
       setStatus('preview');
 
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onloadend = () => {
-        const base64String = reader.result.split(',')[1];
-        setImageBase64(base64String);
-      };
+    } catch (error) {
+      console.log("User cancel:", error);
     }
   };
 
-  // 2. Kirim ke AI
+  // --- KIRIM KE AI ---
   const handleAnalyze = async () => {
     if (!imageBase64) return;
     setStatus('processing');
 
     try {
-      const result = await processImageInput(imageBase64, fileType);
+      // Kirim raw base64. MimeType kita hardcode jpeg karena hasil kompresi kamera pasti jpeg
+      const result = await processImageInput(imageBase64, 'image/jpeg');
       setAiResult(result);
       setStatus('success');
     } catch (error) {
-      alert("Gagal baca struk: " + error.message);
+      alert("Error: " + error.message);
       setStatus('preview');
     }
   };
 
-  // 3. Simpan ke Database
+  // --- SIMPAN DATA ---
   const handleSave = async () => {
     if (!user || !aiResult) return;
     setSaving(true);
     
     try {
-      // Simpan Header
       const { data: headerData, error: headerError } = await supabase
         .from('transaction_headers')
-        .insert([
-          {
+        .insert([{
             user_id: user.id,
             merchant: aiResult.merchant,
             total_amount: aiResult.amount,
             type: aiResult.type,
             category: aiResult.category,
-            // Kasih tanda kalau ini hasil SCAN (buat hitung kuota nanti)
-            receipt_url: "Scan Struk V2", 
+            receipt_url: "Scan V5 Native", 
             is_ai_generated: true
-          }
-        ])
-        .select()
-        .single();
+        }])
+        .select().single();
 
       if (headerError) throw headerError;
       
-      const newHeaderId = headerData.id;
-
-      // Simpan Items
       if (aiResult.items && aiResult.items.length > 0) {
         const itemsToInsert = aiResult.items.map(item => ({
-          header_id: newHeaderId,
+          header_id: headerData.id,
           name: item.name,
           price: item.price,
           qty: 1
         }));
-
-        const { error: itemsError } = await supabase
-          .from('transaction_items')
-          .insert(itemsToInsert);
-
-        if (itemsError) throw itemsError;
+        await supabase.from('transaction_items').insert(itemsToInsert);
       }
 
       navigate('/dashboard');
-
     } catch (error) {
       alert('Gagal simpan: ' + error.message);
-      console.error(error);
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div className="flex flex-col h-screen bg-gray-900 text-white">
+    <div className="flex flex-col h-screen bg-gray-900 text-white relative overflow-hidden">
       
       {/* HEADER */}
-      <div className="p-6 flex items-center justify-between">
-        <button onClick={() => navigate('/dashboard')} className="p-2 bg-gray-800 rounded-full">
-          ❌
+      <div className="p-4 flex items-center justify-between z-10 bg-gray-900 shadow-md">
+        <button onClick={() => navigate('/dashboard')} className="p-2 bg-gray-800 rounded-full text-sm">
+          ❌ Batal
         </button>
-        <h1 className="font-bold">Scan Struk v2</h1>
-        <div className="w-8"></div>
+        <h1 className="font-bold text-lg">Scan Transaksi</h1>
+        <div className="w-10"></div>
       </div>
 
-      <div className="flex-1 flex flex-col items-center justify-center p-6">
+      <div className="flex-1 flex flex-col items-center justify-center p-4">
         
-        {/* AREA FOTO/PREVIEW */}
-        <div className="relative w-full aspect-[3/4] bg-gray-800 rounded-3xl overflow-hidden border-2 border-dashed border-gray-600 flex flex-col items-center justify-center mb-6">
+        {/* AREA FOTO */}
+        <div className="relative w-full h-full bg-gray-800 rounded-2xl overflow-hidden border-2 border-dashed border-gray-700 flex flex-col items-center justify-center">
           
-          {/* Kalau belum ada foto */}
           {status === 'idle' && (
-            <div onClick={() => fileInputRef.current.click()} className="text-center cursor-pointer p-10 w-full h-full flex flex-col items-center justify-center hover:bg-gray-700 transition">
-              <span className="text-6xl mb-4">📸</span>
-              <p className="font-bold text-gray-300">Tap untuk Foto / Upload</p>
-              <p className="text-xs text-gray-500 mt-2">Pastikan foto terang & jelas</p>
+            <div className="flex flex-col gap-6 w-full px-10">
+               <button 
+                 onClick={() => handleNativeCamera('camera')}
+                 className="flex flex-col items-center justify-center bg-brand-600 p-6 rounded-2xl shadow-lg hover:scale-105 transition active:bg-brand-700"
+               >
+                  <span className="text-4xl mb-2">📸</span>
+                  <span className="font-bold text-white text-lg">Kamera</span>
+               </button>
+
+               <button 
+                 onClick={() => handleNativeCamera('photos')}
+                 className="flex flex-col items-center justify-center bg-gray-700 p-6 rounded-2xl shadow-lg hover:bg-gray-600 transition"
+               >
+                  <span className="text-4xl mb-2">🖼️</span>
+                  <span className="font-bold text-gray-300">Galeri</span>
+               </button>
             </div>
           )}
 
-          {/* Kalau sudah ada foto */}
           {(status === 'preview' || status === 'processing' || status === 'success') && imagePreview && (
-            <img src={imagePreview} className="w-full h-full object-contain" alt="Preview" />
+            <img src={imagePreview} className="w-full h-full object-contain bg-black" alt="Preview" />
           )}
 
-          {/* Loading AI */}
+          {/* Overlay Loading AI */}
           {status === 'processing' && (
-            <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center backdrop-blur-sm">
-              <div className="w-16 h-16 border-4 border-brand-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-              <p className="font-bold text-brand-400 animate-pulse">Scanning AI...</p>
+            <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center z-20">
+              <div className="w-12 h-12 border-4 border-brand-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+              <p className="font-bold text-brand-400 animate-pulse text-sm">Sedang Membaca Struk...</p>
             </div>
           )}
-
-          {/* Hidden Input File */}
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            onChange={handleFileChange} 
-            accept="image/*" 
-            className="hidden" 
-          />
         </div>
 
-        {/* TOMBOL ACTION (Saat Preview) */}
+        {/* BUTTON ACTION (Saat Preview) */}
         {status === 'preview' && (
-          <div className="flex gap-4 w-full animate-fade-in-up">
-            <button onClick={() => setStatus('idle')} className="flex-1 py-3 bg-gray-700 rounded-xl font-bold hover:bg-gray-600 transition">
+          <div className="flex gap-3 w-full mt-4 animate-fade-in-up">
+            <button onClick={() => setStatus('idle')} className="flex-1 py-3 bg-gray-700 rounded-xl font-bold">
               Ulang
             </button>
-            <button onClick={handleAnalyze} className="flex-1 py-3 bg-white text-black rounded-xl font-bold hover:bg-gray-200 transition">
-              Analisa ⚡
-            </button>
-          </div>
-        )}
-
-        {/* HASIL AI DENGAN RINCIAN ITEM */}
-        {status === 'success' && aiResult && (
-          <div className="w-full bg-white text-gray-800 rounded-2xl p-5 animate-slide-up max-h-[60vh] overflow-y-auto">
-            {/* Header Struk */}
-            <div className="flex justify-between items-start mb-4 border-b border-gray-100 pb-2 border-dashed">
-              <div>
-                <p className="text-xs text-gray-400 uppercase font-bold">Toko / Merchant</p>
-                <h3 className="text-lg font-bold text-gray-800">{aiResult.merchant}</h3>
-                <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded text-[10px] font-bold mt-1 inline-block">
-                  {aiResult.category}
-                </span>
-              </div>
-              <div className="text-right">
-                <p className="text-xs text-gray-400 uppercase font-bold">Total Bayar</p>
-                <h3 className="text-xl font-bold text-brand-600">Rp {aiResult.amount.toLocaleString()}</h3>
-              </div>
-            </div>
-
-            {/* List Item Belanjaan */}
-            <div className="mb-4">
-              <p className="text-xs text-gray-400 uppercase font-bold mb-2">Rincian Barang (AI)</p>
-              <div className="bg-gray-50 rounded-xl p-3 space-y-2">
-                {aiResult.items && aiResult.items.length > 0 ? (
-                  aiResult.items.map((item, idx) => (
-                    <div key={idx} className="flex justify-between text-sm">
-                      <span className="text-gray-700 truncate w-2/3">{item.name}</span>
-                      <span className="text-gray-500 font-medium">
-                        {item.price > 0 ? item.price.toLocaleString() : '-'}
-                      </span>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-xs text-gray-400 italic">Tidak ada rincian item terdeteksi.</p>
-                )}
-              </div>
-            </div>
-
-            <button 
-              onClick={handleSave} 
-              disabled={saving}
-              className="w-full py-3 bg-brand-500 text-white rounded-xl font-bold shadow-lg hover:bg-brand-600 transition"
-            >
-              {saving ? 'Menyimpan... (V2)' : 'Simpan Semua ✅'}
+            <button onClick={handleAnalyze} className="flex-[2] py-3 bg-white text-black rounded-xl font-bold shadow-lg">
+              Analisa 🚀
             </button>
           </div>
         )}
       </div>
+
+      {/* --- MODAL HASIL (STICKY) --- */}
+      {status === 'success' && aiResult && (
+        <div className="absolute inset-0 z-50 flex items-end justify-center bg-black/50 backdrop-blur-sm animate-fade-in">
+            <div className="bg-white w-full rounded-t-3xl h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+                
+                {/* Header Modal */}
+                <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-white z-10">
+                    <div>
+                        <p className="text-xs text-gray-500 uppercase font-bold tracking-wider">Hasil Scan</p>
+                        <h2 className="text-xl font-bold text-gray-800 truncate max-w-[200px]">{aiResult.merchant}</h2>
+                    </div>
+                    <div className="text-right">
+                        <span className="block text-xs text-gray-400">Total</span>
+                        <span className="text-lg font-bold text-brand-600">Rp {aiResult.amount?.toLocaleString()}</span>
+                    </div>
+                </div>
+
+                {/* Isi Scrollable */}
+                <div className="flex-1 overflow-y-auto p-5 bg-gray-50">
+                    <div className="flex gap-2 mb-4">
+                        <span className="bg-blue-100 text-blue-700 px-3 py-1 rounded-lg text-xs font-bold uppercase">
+                            {aiResult.category || 'Umum'}
+                        </span>
+                        <span className={`px-3 py-1 rounded-lg text-xs font-bold uppercase ${aiResult.type === 'income' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                            {aiResult.type === 'income' ? 'Pemasukan' : 'Pengeluaran'}
+                        </span>
+                    </div>
+                    <p className="text-xs text-gray-400 uppercase font-bold mb-2">Rincian Item</p>
+                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                        {aiResult.items && aiResult.items.length > 0 ? (
+                            aiResult.items.map((item, idx) => (
+                                <div key={idx} className="flex justify-between items-center p-3 border-b border-gray-50 last:border-0 text-sm">
+                                    <span className="text-gray-700 font-medium truncate w-[60%]">{item.name}</span>
+                                    <span className="text-gray-900 font-bold">{item.price?.toLocaleString()}</span>
+                                </div>
+                            ))
+                        ) : (
+                            <div className="p-4 text-center text-gray-400 italic text-sm">
+                                Tidak ada rincian item.
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* Footer Sticky */}
+                <div className="p-4 border-t border-gray-200 bg-white">
+                    <div className="flex gap-3">
+                         <button 
+                            onClick={() => { setStatus('idle'); setAiResult(null); }}
+                            className="flex-1 py-3 border border-gray-300 text-gray-600 rounded-xl font-bold hover:bg-gray-50"
+                        >
+                            Batal
+                        </button>
+                        <button 
+                            onClick={handleSave} 
+                            disabled={saving}
+                            className="flex-[2] py-3 bg-brand-600 text-white rounded-xl font-bold shadow-lg hover:bg-brand-700 transition flex justify-center items-center gap-2"
+                        >
+                            {saving ? 'Menyimpan...' : 'Simpan Data ✅'}
+                        </button>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+      )}
     </div>
   );
 }
