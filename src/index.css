@@ -13,8 +13,8 @@ body {
   width: 100%;
   min-height: 100vh;
   /* Warna dasar gelap kebiruan */
-  background-color: #0f172a; /* slate-900 */
-  color: white; /* Default teks jadi putih */
+  background-color: #f8f9fa; /* slate-900 */
+  color: rgb(3, 3, 3); /* Default teks jadi putih */
 }
 
 #root {
