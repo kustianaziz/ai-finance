@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { 
-  ArrowRight, CheckCircle2, BrainCircuit, Menu, X, ShieldCheck
+  ArrowRight, CheckCircle2, BrainCircuit, Menu, X, ShieldCheck, Sparkles
 } from 'lucide-react';
 
 // --- IMPORT GAMBAR ASET ---
@@ -109,10 +109,10 @@ export default function LandingPage() {
         <div className="max-w-7xl mx-auto px-6 flex justify-between items-center">
           <div className="flex items-center gap-2 cursor-pointer" onClick={() => window.scrollTo(0,0)}>
             <div className="bg-gradient-to-br from-indigo-600 to-violet-600 p-2 rounded-xl text-white shadow-lg shadow-indigo-200">
-               <BrainCircuit size={24} />
+                <Sparkles size={24} />
             </div>
             <span className={`text-xl font-extrabold tracking-tight ${isScrolled ? 'text-slate-800' : 'text-slate-900'}`}>
-              KeuanganAI
+              Rapikus
             </span>
           </div>
           <div className="hidden md:flex items-center gap-6">
@@ -146,6 +146,7 @@ export default function LandingPage() {
               <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-violet-600">Jadi Lebih Chill.</span>
             </h1>
             <p className="text-lg md:text-xl text-slate-600 mb-10 max-w-2xl mx-auto leading-relaxed">Scan struk pakai AI, catat pakai suara, dan pisahkan uang bisnis vs pribadi otomatis. Cocok buat kamu yang benci ribet.</p>
+            <p className="text-lg md:text-xl text-slate-600 mb-10 max-w-2xl mx-auto leading-relaxed">Rapikan Keuangan Untuk Sukses <b>Rapikus</b>.</p>
             <div className="flex flex-col sm:flex-row justify-center gap-4">
               <button onClick={() => navigate('/register')} className="bg-indigo-600 text-white px-8 py-4 rounded-full font-bold text-lg hover:bg-indigo-700 transition shadow-xl shadow-indigo-200 active:scale-95 flex items-center justify-center gap-2">Mulai Gratis <ArrowRight size={20}/></button>
               <button className="bg-white text-slate-700 px-8 py-4 rounded-full font-bold text-lg border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 transition active:scale-95">Lihat Demo</button>
@@ -244,9 +245,9 @@ export default function LandingPage() {
         <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-6">
             <div className="flex items-center gap-2 font-bold text-slate-800">
                 <div className="bg-indigo-600 p-1.5 rounded-lg text-white"><BrainCircuit size={16} /></div>
-                KeuanganAI
+                RapiKus
             </div>
-            <p className="text-slate-500 text-sm">© 2026 KeuanganAI. Made with ❤️ in Indonesia.</p>
+            <p className="text-slate-500 text-sm">© 2026 Rapikus. Made with ❤️ in Indonesia.</p>
         </div>
       </footer>
     </div>

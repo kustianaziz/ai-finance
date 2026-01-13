@@ -6,16 +6,17 @@
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
 }
 
-/* RESET BODY AGAR FULL SCREEN */
+/* UPDATE: Ubah background jadi gelap */
 body {
   margin: 0;
   padding: 0;
   width: 100%;
   min-height: 100vh;
-  background-color: #f8fafc; /* Warna background global */
+  /* Warna dasar gelap kebiruan */
+  background-color: #0f172a; /* slate-900 */
+  color: white; /* Default teks jadi putih */
 }
 
-/* RESET ROOT JUGA */
 #root {
   width: 100%;
   margin: 0;
