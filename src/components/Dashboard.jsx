@@ -223,30 +223,54 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <button 
-          onClick={() => navigate('/analytics')}
-          className="w-full py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 flex items-center justify-center gap-2 hover:bg-gray-100 transition active:scale-[0.98]"
-        >
-          📊 Lihat Detail Analisa
-          <span className="text-gray-400">→</span>
-        </button>
+        {/* --- BAGIAN BAWAH DASHBOARD (Split Tombol Laporan) --- */}
+        <div className="px-6 mb-6">
+            <h3 className="font-bold text-gray-700 mb-4 text-sm uppercase tracking-wider">Laporan & Analisa</h3>
+            <div className="grid grid-cols-2 gap-4">
+                {/* Tombol Analisa (Grafik) */}
+                <button 
+                  onClick={() => navigate('/analytics')}
+                  className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200 flex flex-col justify-center h-24 hover:border-brand-300 transition"
+                >
+                  <span className="text-2xl mb-1">📈</span>
+                  <span className="font-bold text-gray-800 text-sm">Analisa Grafik</span>
+                </button>
+
+                {/* TOMBOL BARU: LAPORAN KEUANGAN (MENU GRID) */}
+                <button 
+                  onClick={() => navigate('/reports-menu')}
+                  className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200 flex flex-col justify-center h-24 hover:border-indigo-300 transition"
+                >
+                  <span className="text-2xl mb-1">📚</span>
+                  <span className="font-bold text-gray-800 text-sm">Laporan Akuntansi</span>
+                </button>
+            </div>
+        </div>
       </div>
 
       {/* --- MENU AKSES FITUR --- */}
       <div className="p-6">
         <h3 className="font-bold text-gray-700 mb-4 text-sm uppercase tracking-wider">Aksi Cepat</h3>
-        <div className="grid grid-cols-2 gap-4">
-          <button onClick={() => navigate('/voice')} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center hover:bg-brand-50 hover:border-brand-200 transition group active:scale-95">
-            <span className="text-4xl mb-3 group-hover:scale-110 transition">🎙️</span>
-            <span className="font-bold text-gray-800">Voice Input</span>
-            <span className="text-xs text-gray-400 mt-1">Ngomong aja</span>
+        
+        {/* Ubah grid-cols-2 jadi grid-cols-3 biar muat 3 tombol */}
+        <div className="grid grid-cols-3 gap-3">
+          
+          <button onClick={() => navigate('/voice')} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center hover:bg-brand-50 hover:border-brand-200 transition group active:scale-95">
+            <span className="text-3xl mb-2 group-hover:scale-110 transition">🎙️</span>
+            <span className="font-bold text-xs text-gray-800 text-center">Voice</span>
           </button>
           
-          <button onClick={() => navigate('/scan')} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center hover:bg-brand-50 hover:border-brand-200 transition group active:scale-95">
-            <span className="text-4xl mb-3 group-hover:scale-110 transition">📸</span>
-            <span className="font-bold text-gray-800">Scan Struk</span>
-            <span className="text-xs text-gray-400 mt-1">Foto bon belanja</span>
+          <button onClick={() => navigate('/scan')} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center hover:bg-brand-50 hover:border-brand-200 transition group active:scale-95">
+            <span className="text-3xl mb-2 group-hover:scale-110 transition">📸</span>
+            <span className="font-bold text-xs text-gray-800 text-center">Scan</span>
           </button>
+
+          {/* TOMBOL BARU: PEMBUKUAN */}
+          <button onClick={() => navigate('/journal-process')} className="bg-indigo-50 p-4 rounded-2xl shadow-sm border border-indigo-100 flex flex-col items-center hover:bg-indigo-100 transition group active:scale-95">
+            <span className="text-3xl mb-2 group-hover:scale-110 transition">⚙️</span>
+            <span className="font-bold text-xs text-indigo-800 text-center leading-tight">Proses<br/>Jurnal</span>
+          </button>
+
         </div>
       </div>
 

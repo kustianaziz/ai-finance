@@ -37,40 +37,35 @@ export const processImageInput = async (fileBase64, mimeType) => {
   try {
     const model = genAI.getGenerativeModel({ 
         model: MODEL_NAME,
-        // OPTIMASI VITAL: Native JSON Mode ⚡
         generationConfig: { 
             responseMimeType: "application/json",
-            temperature: 0.2 // Suhu rendah biar AI gak halusinasi (lebih cepat mikir)
+            temperature: 0.2 
         }
     });
 
-    // Prompt Bahasa Inggris (Biasanya diproses lebih cepat oleh model daripada Indo)
-    // Tapi output tetap kita minta sesuai data struk
+    // PROMPT LEBIH RINGAN & CEPAT
+    // Kita HAPUS instruksi nebak allocation_type
     const prompt = `
     Analyze receipt image. Extract data strictly into this JSON structure:
     {
       "merchant": "Store Name",
       "amount": Total Amount (number),
-      "category": "Food/Transport/Shopping/etc",
+      "category": "Food/Transport/Shopping/etc (Indonesian)",
       "type": "expense" or "income",
       "items": [
         { "name": "Item Name", "price": Item Price (number) }
       ]
     }
-    If detail items are unclear, guess based on total or leave empty.
     `;
     
     const imagePart = { inlineData: { data: fileBase64, mimeType: mimeType } };
-
     const result = await model.generateContent([prompt, imagePart]);
-    
-    // Langsung Parse (Tanpa Regex Cleanup)
     return JSON.parse(result.response.text());
 
   } catch (error) {
+    // ... error handling sama
     console.error("Vision Error:", error);
-    if (error.message.includes("429")) throw new Error("Server Sibuk (Limit). Tunggu sebentar.");
-    throw new Error("Gagal analisa gambar. Coba foto ulang.");
+    throw new Error("Gagal analisa gambar.");
   }
 };
 
