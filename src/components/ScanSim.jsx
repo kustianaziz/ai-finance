@@ -1,43 +1,63 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthProvider';
 import { processImageInput } from '../utils/aiLogic';
 import { checkUsageLimit } from '../utils/subscriptionLogic';
 import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { ArrowLeft, Repeat, Check, X, Building2, User } from 'lucide-react';
 
 export default function ScanSim() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  // STATE UMUM
-  const [status, setStatus] = useState('idle'); 
+  // STATE UTAMA
+  const [status, setStatus] = useState('idle'); // idle, preview, processing, success
   const [imagePreview, setImagePreview] = useState(null);
   const [imageBase64, setImageBase64] = useState(null);
   const [aiResult, setAiResult] = useState(null);
   const [saving, setSaving] = useState(false);
   
-  // STATE MODE (Depan)
-  const [mode, setMode] = useState('BUSINESS'); 
+  // STATE MODE (Otomatis dari Profil User)
+  const [activeMode, setActiveMode] = useState('PERSONAL'); // Default Personal
+  const [entityName, setEntityName] = useState('');
 
-  // STATE EDITABLE (Belakang/Modal)
+  // STATE TRANSAKSI
   const [trxType, setTrxType] = useState('expense'); // expense / income
-  const [allocation, setAllocation] = useState('BUSINESS'); 
+  const [allocation, setAllocation] = useState('PERSONAL'); 
 
-  // 1. CEK MEMORY SAAT LOAD
+  // 1. CEK MODE SAAT LOAD (DARI DATABASE/SESSION)
   useEffect(() => {
-    const savedMode = localStorage.getItem('scan_mode');
-    if (savedMode) setMode(savedMode);
+    fetchUserMode();
   }, []);
 
-  // 2. TOGGLE MODE DEPAN
-  const toggleMode = (newMode) => {
-      setMode(newMode);
-      localStorage.setItem('scan_mode', newMode);
+  const fetchUserMode = async () => {
+    if (!user) return;
+    
+    // Ambil data profil untuk tahu dia lagi mode apa
+    // (Nanti di dashboard kita buat fitur ganti mode yang simpan ke DB/LocalStorage)
+    // Untuk sekarang kita simulasi ambil dari LocalStorage 'app_mode'
+    // Kalau tidak ada, fallback ke account_type user
+    
+    const savedMode = localStorage.getItem('app_mode'); 
+    
+    if (savedMode) {
+        setActiveMode(savedMode); // 'BUSINESS', 'ORGANIZATION', 'PERSONAL'
+    } else {
+        // Fallback: Cek tipe akun asli user
+        const { data } = await supabase.from('profiles').select('account_type, entity_name').eq('id', user.id).single();
+        if (data) {
+            const defaultMode = data.account_type === 'business' ? 'BUSINESS' : 
+                                data.account_type === 'organization' ? 'ORGANIZATION' : 'PERSONAL';
+            setActiveMode(defaultMode);
+            setEntityName(data.entity_name);
+        }
+    }
   };
 
   // --- KAMERA ---
   const handleNativeCamera = async (sourceMode) => {
+    // Cek Limit dulu
     const limitCheck = await checkUsageLimit(user.id, 'SCAN');
     if (!limitCheck.allowed) {
       if (window.confirm(limitCheck.message + "\nMau upgrade?")) navigate('/upgrade');
@@ -46,7 +66,10 @@ export default function ScanSim() {
 
     try {
       const image = await Camera.getPhoto({
-        quality: 40, allowEditing: false, resultType: CameraResultType.Base64, width: 500,
+        quality: 50, 
+        allowEditing: false, 
+        resultType: CameraResultType.Base64, 
+        width: 800, // Sedikit lebih besar biar AI jelas baca teksnya
         source: sourceMode === 'camera' ? CameraSource.Camera : CameraSource.Photos,
       });
       setImageBase64(image.base64String);
@@ -66,48 +89,55 @@ export default function ScanSim() {
       const result = await processImageInput(imageBase64, 'image/jpeg');
       setAiResult(result);
 
-      // --- LOGIC PENENTUAN DEFAULT (SMART DEFAULT) ---
+      // --- SMART DEFAULT LOGIC ---
       setTrxType(result.type || 'expense');
 
-      // Default Allocation sesuai Mode Depan
-      if (mode === 'BUSINESS') {
-          setAllocation('BUSINESS'); // Default ke Operasional
+      // OTOMATIS SESUAI MODE AKTIF (Gak perlu user milih lagi)
+      if (activeMode === 'BUSINESS' || activeMode === 'ORGANIZATION') {
+          setAllocation('BUSINESS'); // Masuk Laporan Bisnis
       } else {
-          setAllocation('PERSONAL'); // Default ke Skip (Aman)
+          setAllocation('PERSONAL'); // Masuk Arsip Pribadi
       }
       
       setStatus('success');
     } catch (error) {
-      alert("Error: " + error.message);
+      alert("Gagal analisa: " + error.message);
       setStatus('preview');
     }
   };
 
-  // --- SIMPAN ---
+  // --- SIMPAN KE SUPABASE ---
   const handleSave = async () => {
     if (!user || !aiResult) return;
     setSaving(true);
     
     try {
-      const { data: headerData, error: headerError } = await supabase
-        .from('transaction_headers')
-        .insert([{
+      // Siapkan Data
+      const payload = {
             user_id: user.id,
             merchant: aiResult.merchant,
             total_amount: aiResult.amount,
+            type: trxType,
             
-            type: trxType, 
-            allocation_type: allocation, // Ini yang dikirim ke DB
+            // PENTING: Allocation Type menentukan masuk buku mana
+            allocation_type: allocation, 
             
             category: aiResult.category,
-            receipt_url: "Scan V9 (Simplified UX)", 
+            receipt_url: "Scan V10 (Global Mode)", 
             is_ai_generated: true,
-            is_journalized: false 
-        }])
-        .select().single();
+            is_journalized: false,
+            created_at: new Date().toISOString()
+      };
+
+      const { data: headerData, error: headerError } = await supabase
+        .from('transaction_headers')
+        .insert([payload])
+        .select()
+        .single();
 
       if (headerError) throw headerError;
       
+      // Simpan Item Detail (jika ada)
       if (aiResult.items && aiResult.items.length > 0) {
         const itemsToInsert = aiResult.items.map(item => ({
           header_id: headerData.id,
@@ -118,7 +148,7 @@ export default function ScanSim() {
         await supabase.from('transaction_items').insert(itemsToInsert);
       }
 
-      navigate('/dashboard');
+      navigate('/dashboard'); // Balik ke Dashboard
     } catch (error) {
       alert('Gagal simpan: ' + error.message);
     } finally {
@@ -126,182 +156,198 @@ export default function ScanSim() {
     }
   };
 
+  // --- UI COMPONENT ---
   return (
-    <div className="flex flex-col h-screen bg-gray-900 text-white relative overflow-hidden">
+    <div className="flex flex-col h-screen bg-slate-900 text-white relative font-sans">
       
-      {/* HEADER */}
-      <div className="p-4 flex items-center justify-between z-10 bg-gray-900 shadow-md">
-        <button onClick={() => navigate('/dashboard')} className="p-2 bg-gray-800 rounded-full text-sm">❌</button>
-        <h1 className="font-bold text-lg">Scan Transaksi</h1>
-        <div className="w-8"></div>
+      {/* HEADER (Sticky) */}
+      <div className="p-4 flex items-center justify-between bg-slate-900/90 backdrop-blur-md z-20 border-b border-white/10">
+        <button onClick={() => navigate('/dashboard')} className="p-2 bg-slate-800 rounded-full text-slate-300 hover:text-white transition">
+            <X size={20} />
+        </button>
+        
+        {/* Indikator Mode (Bukan Tombol Ganti) */}
+        <div className="flex flex-col items-center">
+            <h1 className="font-bold text-lg">Scan Struk</h1>
+            <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide border ${
+                activeMode === 'PERSONAL' ? 'bg-pink-500/20 border-pink-500/50 text-pink-300' : 'bg-blue-500/20 border-blue-500/50 text-blue-300'
+            }`}>
+                {activeMode === 'PERSONAL' ? <User size={10} /> : <Building2 size={10} />}
+                <span>Mode {activeMode === 'PERSONAL' ? 'Pribadi' : activeMode === 'BUSINESS' ? 'Bisnis' : 'Organisasi'}</span>
+            </div>
+        </div>
+        
+        <div className="w-9"></div> {/* Spacer kanan biar tengah */}
       </div>
 
-      {/* --- TOGGLE SWITCH MODE (DEPAN) --- */}
-      {status === 'idle' && (
-        <div className="px-6 pb-2 pt-4 bg-gray-900 z-10">
-            <div className="bg-gray-800 p-1 rounded-xl flex">
-                <button 
-                    onClick={() => toggleMode('BUSINESS')}
-                    className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${
-                        mode === 'BUSINESS' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'
-                    }`}
-                >
-                    🏢 Bisnis
-                </button>
-                <button 
-                    onClick={() => toggleMode('PERSONAL')}
-                    className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${
-                        mode === 'PERSONAL' ? 'bg-gray-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'
-                    }`}
-                >
-                    👤 Pribadi
-                </button>
-            </div>
-            <p className="text-center text-[10px] text-gray-500 mt-2">
-                {mode === 'BUSINESS' ? 'Pengeluaran untuk Toko/Usaha' : 'Pengeluaran Pribadi/Rumah Tangga'}
-            </p>
-        </div>
-      )}
-
       {/* KONTEN UTAMA */}
-      <div className="flex-1 flex flex-col items-center justify-center p-4 overflow-y-auto pb-24 relative">
-        <div className={`relative w-full flex-1 rounded-2xl overflow-hidden border-2 flex flex-col items-center justify-center min-h-[300px] transition-colors ${
-            mode === 'BUSINESS' ? 'bg-gray-800 border-blue-900/50' : 'bg-gray-800 border-gray-600'
+      <div className="flex-1 flex flex-col items-center justify-center p-6 relative">
+        
+        {/* FRAME KAMERA */}
+        <div className={`relative w-full aspect-[3/4] max-h-[60vh] rounded-3xl overflow-hidden border-2 flex flex-col items-center justify-center transition-all shadow-2xl ${
+            activeMode === 'PERSONAL' ? 'bg-slate-800 border-pink-500/30 shadow-pink-900/20' : 'bg-slate-800 border-blue-500/30 shadow-blue-900/20'
         }`}>
           
+          {/* STATE: IDLE (Belum ada foto) */}
           {status === 'idle' && (
-            <div className="flex flex-col gap-6 w-full px-10 my-auto">
-               <button onClick={() => handleNativeCamera('camera')} className={`flex flex-col items-center justify-center p-6 rounded-2xl shadow-lg hover:scale-105 transition active:scale-95 ${
-                   mode === 'BUSINESS' ? 'bg-blue-600 active:bg-blue-700' : 'bg-gray-600 active:bg-gray-700'
+            <div className="flex flex-col gap-4 w-full px-8 animate-fade-in-up">
+               <button onClick={() => handleNativeCamera('camera')} className={`w-full py-5 rounded-2xl flex flex-col items-center justify-center gap-2 transition active:scale-95 hover:brightness-110 ${
+                   activeMode === 'PERSONAL' ? 'bg-pink-600' : 'bg-blue-600'
                }`}>
-                  <span className="text-4xl mb-2">📸</span>
-                  <span className="font-bold text-white text-lg">Scan Struk</span>
+                  <span className="text-3xl">📸</span>
+                  <span className="font-bold text-white text-lg">Ambil Foto</span>
                </button>
-               <button onClick={() => handleNativeCamera('photos')} className="flex flex-col items-center justify-center bg-gray-700 p-6 rounded-2xl shadow-lg active:scale-95">
-                  <span className="text-4xl mb-2">🖼️</span>
-                  <span className="font-bold text-gray-300">Ambil Galeri</span>
+               
+               <button onClick={() => handleNativeCamera('photos')} className="w-full py-4 bg-slate-700/50 border border-slate-600 rounded-2xl flex items-center justify-center gap-2 hover:bg-slate-700 transition active:scale-95">
+                  <span className="text-xl">🖼️</span>
+                  <span className="font-bold text-slate-300">Pilih Galeri</span>
                </button>
             </div>
           )}
 
+          {/* STATE: PREVIEW (Sudah ada foto) */}
           {(status === 'preview' || status === 'processing' || status === 'success') && imagePreview && (
-            <div className="w-full h-full bg-black flex items-center justify-center">
-                 <img src={imagePreview} className="w-full h-auto object-contain" alt="Preview" />
-            </div>
+            <img src={imagePreview} className="w-full h-full object-contain bg-black" alt="Struk Preview" />
           )}
 
+          {/* LOADING OVERLAY */}
           {status === 'processing' && (
-            <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center z-20">
-              <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-              <p className="font-bold text-white animate-pulse text-sm">AI Sedang Bekerja...</p>
+            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center z-20">
+              <div className={`w-14 h-14 border-4 border-t-transparent rounded-full animate-spin mb-4 ${
+                  activeMode === 'PERSONAL' ? 'border-pink-500' : 'border-blue-500'
+              }`}></div>
+              <p className="font-bold text-white animate-pulse">AI Sedang Membaca...</p>
             </div>
           )}
         </div>
 
+        {/* TOMBOL AKSI (Bawah Frame) */}
         {status === 'preview' && (
-          <div className="flex gap-3 w-full mt-4 animate-fade-in-up flex-shrink-0">
-            <button onClick={() => setStatus('idle')} className="flex-1 py-3 bg-gray-700 rounded-xl font-bold">Ulang</button>
-            <button onClick={handleAnalyze} className="flex-[2] py-3 bg-white text-black rounded-xl font-bold shadow-lg">Analisa 🚀</button>
+          <div className="flex gap-3 w-full mt-6 max-w-sm animate-slide-up">
+            <button onClick={() => setStatus('idle')} className="flex-1 py-3.5 bg-slate-800 text-slate-300 border border-slate-700 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-slate-700">
+                <Repeat size={18}/> Ulang
+            </button>
+            <button onClick={handleAnalyze} className={`flex-[2] py-3.5 text-white rounded-2xl font-bold shadow-lg flex items-center justify-center gap-2 hover:brightness-110 active:scale-95 ${
+                 activeMode === 'PERSONAL' ? 'bg-pink-600' : 'bg-blue-600'
+            }`}>
+                Analisa Struk <ArrowLeft className="rotate-180" size={20}/>
+            </button>
           </div>
         )}
       </div>
 
-      {/* --- MODAL HASIL (TEMPAT EDIT DETAIL) --- */}
+      {/* --- MODAL HASIL ANALISA (POPUP DARI BAWAH) --- */}
       {status === 'success' && aiResult && (
         <div className="absolute inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm animate-fade-in">
-            <div className="bg-white w-full rounded-t-3xl h-[85vh] flex flex-col shadow-2xl">
+            <div className="bg-white w-full max-w-md h-[80vh] rounded-t-[2.5rem] flex flex-col shadow-2xl overflow-hidden animate-slide-up">
                 
+                {/* Drag Handle */}
+                <div className="w-full flex justify-center pt-3 pb-1 bg-white cursor-grab">
+                    <div className="w-12 h-1.5 bg-slate-200 rounded-full"></div>
+                </div>
+
                 {/* Header Modal */}
-                <div className="p-5 border-b bg-white rounded-t-3xl z-10">
-                    <h2 className="text-xl font-bold text-gray-800 truncate">{aiResult.merchant}</h2>
-                    <div className="flex justify-between items-end mt-2">
-                         {/* SWITCH PENGELUARAN / PEMASUKAN */}
-                        <div className="flex bg-gray-100 rounded-lg p-1">
+                <div className="px-6 pb-4 border-b border-slate-100 bg-white">
+                    <div className="flex justify-between items-start mb-2">
+                        <div>
+                            <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">MERCHANT</p>
+                            <h2 className="text-2xl font-extrabold text-slate-900 truncate max-w-[200px]">{aiResult.merchant}</h2>
+                        </div>
+                        <div className={`px-2 py-1 rounded-lg text-xs font-bold uppercase ${
+                            activeMode === 'PERSONAL' ? 'bg-pink-50 text-pink-600' : 'bg-blue-50 text-blue-600'
+                        }`}>
+                            {activeMode === 'PERSONAL' ? 'Pribadi' : 'Bisnis'}
+                        </div>
+                    </div>
+                    
+                    {/* Amount & Type Switcher */}
+                    <div className="flex items-center gap-3 mt-2">
+                        <div className="flex bg-slate-100 p-1 rounded-xl">
                             <button 
                                 onClick={() => setTrxType('expense')}
-                                className={`px-3 py-1 rounded-md text-xs font-bold transition ${trxType === 'expense' ? 'bg-red-500 text-white shadow' : 'text-gray-500'}`}
+                                className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${trxType === 'expense' ? 'bg-red-500 text-white shadow-md' : 'text-slate-500'}`}
                             >
-                                💸 Keluar
+                                Keluar
                             </button>
                             <button 
                                 onClick={() => setTrxType('income')}
-                                className={`px-3 py-1 rounded-md text-xs font-bold transition ${trxType === 'income' ? 'bg-green-500 text-white shadow' : 'text-gray-500'}`}
+                                className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${trxType === 'income' ? 'bg-green-500 text-white shadow-md' : 'text-slate-500'}`}
                             >
-                                💰 Masuk
+                                Masuk
                             </button>
                         </div>
-                        <span className={`text-xl font-bold ${trxType === 'income' ? 'text-green-600' : 'text-red-600'}`}>
+                        <span className={`text-2xl font-mono font-bold ${trxType === 'income' ? 'text-green-600' : 'text-red-600'}`}>
                             Rp {aiResult.amount?.toLocaleString()}
                         </span>
                     </div>
                 </div>
 
-                {/* Isi Modal */}
-                <div className="flex-1 overflow-y-auto p-5 bg-gray-50">
+                {/* Body Modal (Scrollable) */}
+                <div className="flex-1 overflow-y-auto p-6 bg-slate-50">
                     
-                    {/* --- DYNAMIC DROPDOWN (FITUR BARU) --- */}
-                    <div className="mb-4">
-                        <label className="text-[10px] font-bold text-gray-400 uppercase mb-1 block">
-                            {mode === 'BUSINESS' ? 'Jenis Transaksi Bisnis' : 'Sumber Dana Pribadi'}
+                    {/* INFO ALOKASI (Read Only / Simple Switch) */}
+                    <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 mb-4">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 block">
+                            Alokasi Dana
                         </label>
                         
-                        <select 
-                            value={allocation}
-                            onChange={(e) => setAllocation(e.target.value)}
-                            className={`w-full p-3 rounded-xl border-2 font-bold text-sm outline-none appearance-none ${
-                                mode === 'BUSINESS' ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-gray-300 bg-gray-100 text-gray-600'
-                            }`}
-                        >
-                            {/* PILIHAN JIKA MODE = BISNIS */}
-                            {mode === 'BUSINESS' ? (
-                                <>
-                                    <option value="BUSINESS">🏢 Operasional (Masuk Laporan)</option>
-                                    <option value="SALARY">💰 Gaji (Ambil Gaji Owner)</option>
-                                </>
-                            ) : (
-                            /* PILIHAN JIKA MODE = PRIBADI */
-                                <>
-                                    <option value="PERSONAL">⛔ Pribadi (Skip / Arsip Saja)</option>
-                                    <option value="PRIVE">👨‍👩‍👧 Prive (Ambil Kas Toko)</option>
-                                </>
-                            )}
-                        </select>
-
-                        <p className="text-[10px] text-gray-400 mt-1 ml-1">
-                            {allocation === 'BUSINESS' && "Dicatat sebagai Beban Operasional Toko."}
-                            {allocation === 'SALARY' && "Dicatat sebagai Beban Gaji Direktur."}
-                            {allocation === 'PERSONAL' && "Hanya arsip, TIDAK memotong Kas Toko."}
-                            {allocation === 'PRIVE' && "Mengurangi Modal & Kas Toko."}
+                        {/* Jika Bisnis, User masih bisa milih: Operasional Toko ATAU Gaji Diri Sendiri */}
+                        {activeMode === 'BUSINESS' ? (
+                            <select 
+                                value={allocation} 
+                                onChange={(e) => setAllocation(e.target.value)}
+                                className="w-full p-2 bg-blue-50 border border-blue-100 rounded-lg text-blue-700 font-bold text-sm outline-none"
+                            >
+                                <option value="BUSINESS">🏢 Operasional Toko</option>
+                                <option value="SALARY">💰 Ambil Gaji Owner</option>
+                            </select>
+                        ) : (
+                            // Jika Pribadi, User bisa milih: Pribadi Murni ATAU Prive (Ambil Modal Toko)
+                            <select 
+                                value={allocation} 
+                                onChange={(e) => setAllocation(e.target.value)}
+                                className="w-full p-2 bg-pink-50 border border-pink-100 rounded-lg text-pink-700 font-bold text-sm outline-none"
+                            >
+                                <option value="PERSONAL">🏠 Belanja Pribadi</option>
+                                <option value="PRIVE">💸 Prive (Ambil Kas Toko)</option>
+                            </select>
+                        )}
+                        <p className="text-[10px] text-slate-400 mt-2 italic">
+                            *Otomatis terpilih berdasarkan mode aplikasi Anda.
                         </p>
                     </div>
 
-                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-3">
-                         <div className="flex justify-between mb-2">
-                             <span className="text-xs font-bold text-gray-400">KATEGORI DETEKSI</span>
-                             <span className="text-xs font-bold text-blue-600">{aiResult.category}</span>
-                         </div>
-                         <hr className="border-gray-100 mb-2"/>
-                         {aiResult.items?.map((item, idx) => (
-                            <div key={idx} className="flex justify-between py-1 text-sm text-gray-600">
-                                <span className="truncate w-[60%]">{item.name}</span>
-                                <span>{item.price?.toLocaleString()}</span>
+                    {/* ITEM LIST */}
+                    <div className="space-y-3">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Detail Item</p>
+                        {aiResult.items?.map((item, idx) => (
+                            <div key={idx} className="flex justify-between items-center bg-white p-3 rounded-xl border border-slate-100">
+                                <span className="text-sm font-medium text-slate-700 truncate w-[60%]">{item.name}</span>
+                                <span className="text-sm font-bold text-slate-900">{item.price?.toLocaleString()}</span>
                             </div>
                         ))}
+                        {(!aiResult.items || aiResult.items.length === 0) && (
+                            <p className="text-center text-xs text-slate-400 py-4 italic">Tidak ada detail item terdeteksi.</p>
+                        )}
                     </div>
                 </div>
 
-                {/* Footer */}
-                <div className="p-4 border-t bg-white flex gap-3">
-                     <button onClick={() => { setStatus('idle'); setAiResult(null); }} className="flex-1 py-3 border text-gray-600 rounded-xl font-bold">Batal</button>
-                     <button onClick={handleSave} disabled={saving} className={`flex-[2] py-3 text-white rounded-xl font-bold shadow-lg flex justify-center items-center gap-2 ${
-                         trxType === 'income' ? 'bg-green-600' : 'bg-brand-600'
+                {/* Footer Actions */}
+                <div className="p-4 bg-white border-t border-slate-100 flex gap-3">
+                     <button onClick={() => { setStatus('idle'); setAiResult(null); }} className="flex-1 py-3.5 border border-slate-200 text-slate-600 rounded-xl font-bold hover:bg-slate-50">
+                        Batal
+                     </button>
+                     <button onClick={handleSave} disabled={saving} className={`flex-[2] py-3.5 text-white rounded-xl font-bold shadow-lg flex items-center justify-center gap-2 transition active:scale-95 ${
+                        trxType === 'income' ? 'bg-green-600' : 'bg-slate-900'
                      }`}>
-                        {saving ? 'Menyimpan...' : 'Simpan ✅'}
-                    </button>
+                        {saving ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"/> : <Check size={20}/>}
+                        {saving ? 'Menyimpan...' : 'Simpan Transaksi'}
+                     </button>
                 </div>
             </div>
         </div>
       )}
+
     </div>
   );
 }

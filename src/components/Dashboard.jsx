@@ -1,316 +1,538 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthProvider';
 import { supabase } from '../supabaseClient';
-import { generateFinancialInsights } from '../utils/aiLogic'; 
+import { generateFinancialInsights } from '../utils/aiLogic';
+import { 
+  Bell, LogOut, ArrowUpRight, ArrowDownLeft, X,
+  ScanLine, Mic, BarChart3, Keyboard, 
+  Briefcase, Sparkles, ChevronRight, Crown, RefreshCcw,
+  BookOpenCheck, ClipboardList, LayoutGrid, 
+  Package, Receipt, Calculator, Users, ScrollText, HandCoins, 
+  PiggyBank, Target, Landmark, Calendar, TrendingUp, CheckCircle2, Rocket
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const { signOut, user } = useAuth();
   
-  // State Data
+  // --- STATE ---
+  const [profile, setProfile] = useState(null);
+  const [summary, setSummary] = useState({ income: 0, expense: 0, balance: 0 });
   const [transactions, setTransactions] = useState([]);
-  const [totalExpense, setTotalExpense] = useState(0);
   const [loading, setLoading] = useState(true);
   
-  // State Notifikasi AI (Advisor)
-  const [showNotif, setShowNotif] = useState(false);
+  // --- GLOBAL MODE ---
+  const [activeMode, setActiveMode] = useState(() => {
+      return localStorage.getItem('app_mode') || 'PERSONAL';
+  });
+
+  const [showNotif, setShowNotif] = useState(false); 
+  const [showMoreMenu, setShowMoreMenu] = useState(false); 
+  const [showUpsell, setShowUpsell] = useState(false); 
+  
   const [aiTips, setAiTips] = useState([]);
   const [loadingTips, setLoadingTips] = useState(false);
-  const [loadingText, setLoadingText] = useState("Memanggil Juragan...");
 
   useEffect(() => {
-    if (user) {
-      fetchDashboardData();
-    }
+    if (user) fetchProfileAndData();
   }, [user]);
 
-  const fetchDashboardData = async () => {
+  useEffect(() => {
+    localStorage.setItem('app_mode', activeMode);
+  }, [activeMode]);
+
+  const handleLogout = async () => {
+      localStorage.removeItem('app_mode'); 
+      await signOut(); 
+  };
+
+  const fetchProfileAndData = async () => {
     try {
       setLoading(true);
+      const { data: profileData } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+      const userProfile = profileData || {
+         full_name: user.user_metadata.full_name,
+         account_type: user.user_metadata.account_type || 'personal',
+         entity_name: user.user_metadata.entity_name
+      };
+      setProfile(userProfile);
 
-      // --- QUERY 1: LIST TRANSAKSI (5 Terakhir) ---
-      const { data: listData, error: listError } = await supabase
-        .from('transaction_headers')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('date', { ascending: false })
-        .limit(5);
+      // --- LOGIC PERBAIKAN: DETEKSI GRUP PERSONAL ---
+      // Personal Pro tetap dianggap keluarga 'Personal' dalam hal Tampilan Mode
+      const isPersonalGroup = ['personal', 'personal_pro'].includes(userProfile.account_type);
 
-      if (listError) throw listError;
-      setTransactions(listData || []);
-
-      // --- QUERY 2: TOTAL PENGELUARAN BULAN INI ---
-      const now = new Date();
-      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-
-      const { data: expenseData, error: expenseError } = await supabase
-        .from('transaction_headers')
-        .select('total_amount')
-        .eq('user_id', user.id)
-        .eq('type', 'expense')
-        .gte('date', startOfMonth);
-
-      if (expenseError) throw expenseError;
-
-      const total = expenseData.reduce((acc, curr) => acc + Number(curr.total_amount), 0);
-      setTotalExpense(total);
-
-    } catch (error) {
-      console.error('Error loading dashboard:', error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // --- FUNGSI KLIK LONCENG (GENERATE AI JURAGAN) ---
-  const handleBellClick = async () => {
-    // Toggle tampilan
-    setShowNotif(!showNotif);
-
-    // Kalau mau nutup atau data sudah ada, jangan load lagi
-    if (showNotif || aiTips.length > 0) return;
-
-    setLoadingTips(true);
-    
-    // Gacha teks loading biar gak bosen
-    const messages = [
-        "Sedang memanggil Juragan...", 
-        "Juragan lagi ngitung boncosmu...", 
-        "Menganalisa kebiasaan jajan...", 
-        "Siap-siap kena semprot..."
-    ];
-    setLoadingText(messages[Math.floor(Math.random() * messages.length)]);
-
-    try {
-      const now = new Date();
-      const thirtyDaysAgo = new Date(now.setDate(now.getDate() - 30)).toISOString();
-
-      // Ambil data lebih banyak (50) biar analisa "Kategori Terboros" akurat
-      // Tenang, aiLogic kita sekarang ngitungnya di JS dulu, jadi enteng!
-      const { data: historyData } = await supabase
-        .from('transaction_headers')
-        .select('merchant, category, type, total_amount')
-        .eq('user_id', user.id)
-        .gte('date', thirtyDaysAgo)
-        .limit(50); 
-
-      if (!historyData || historyData.length < 3) {
-        setAiTips(["Data transaksi masih dikit banget nih. Pakai dulu aplikasinya buat catat pengeluaran ya!"]);
-        setLoadingTips(false);
-        return;
+      if (isPersonalGroup) {
+          // PAKSA JADI PERSONAL
+          setActiveMode('PERSONAL');
+          localStorage.setItem('app_mode', 'PERSONAL');
+      } else {
+          // Jika Bisnis/Org
+          if (!localStorage.getItem('app_mode')) {
+              const defaultMode = userProfile.account_type === 'business' ? 'BUSINESS' : 'ORGANIZATION';
+              setActiveMode(defaultMode);
+          }
       }
 
-      // Kirim ke AI Logic (Yang sudah dioptimasi)
-      const insights = await generateFinancialInsights(historyData);
-      setAiTips(insights);
+      const now = new Date();
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+      const { data: transData } = await supabase
+        .from('transaction_headers')
+        .select('type, total_amount')
+        .eq('user_id', user.id)
+        .gte('date', startOfMonth);
 
-    } catch (error) {
-      console.error("Gagal generate tips:", error);
-      setAiTips(["Maaf Juragan lagi sibuk ngurusin bisnis lain. Coba nanti ya!"]);
-    } finally {
-      setLoadingTips(false);
+      if (transData) {
+         let inc = 0, exp = 0;
+         transData.forEach(t => {
+            if (t.type === 'income') inc += Number(t.total_amount);
+            else exp += Number(t.total_amount);
+         });
+         setSummary({ income: inc, expense: exp, balance: inc - exp });
+         
+         const { data: listData } = await supabase
+            .from('transaction_headers')
+            .select('*')
+            .eq('user_id', user.id)
+            .order('date', { ascending: false })
+            .limit(5);
+         setTransactions(listData || []);
+      }
+    } catch (error) { console.error(error); } finally { setLoading(false); }
+  };
+
+  const handleSwitchNav = (path, targetMode) => {
+      if (targetMode && targetMode !== activeMode) {
+          setActiveMode(targetMode);
+      }
+      setShowMoreMenu(false);
+      navigate(path);
+  };
+
+  const toggleMode = () => {
+    // Cek apakah user masuk grup personal (Free atau Pro)
+    const isPersonalGroup = ['personal', 'personal_pro'].includes(profile?.account_type);
+
+    if (isPersonalGroup) {
+        setShowUpsell(true); // Tawarkan upgrade ke BISNIS jika klik toggle
+        return;
     }
+    const mainMode = profile?.account_type === 'organization' ? 'ORGANIZATION' : 'BUSINESS';
+    setActiveMode(activeMode === 'PERSONAL' ? mainMode : 'PERSONAL');
   };
 
-  const formatIDR = (num) => {
-    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(num);
+  const getThemeColor = () => {
+      if (activeMode === 'BUSINESS') return 'bg-blue-600';
+      if (activeMode === 'ORGANIZATION') return 'bg-teal-600';
+      return 'bg-indigo-600'; 
   };
+
+  const handleAiAdvice = async () => {
+    setShowNotif(!showNotif);
+    if (showNotif || aiTips.length > 0) return;
+    setLoadingTips(true);
+    try {
+       const { data: history } = await supabase.from('transaction_headers').select('*').eq('user_id', user.id).limit(50);
+       const insights = await generateFinancialInsights(history || []);
+       setAiTips(insights);
+    } catch (e) { setAiTips(["Gagal memanggil AI Advisor."]); } finally { setLoadingTips(false); }
+  };
+
+  const formatIDR = (num) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(num);
+
+  const MenuCard = ({ icon: Icon, label, onClick, colorClass, isLocked = false, isPro = false }) => (
+    <button 
+      onClick={isLocked ? () => setShowUpsell(true) : onClick} 
+      className={`relative p-3 rounded-2xl bg-white border border-slate-100 shadow-sm flex flex-col items-center justify-center gap-2 transition active:scale-95 hover:shadow-md hover:border-indigo-100 h-[85px] w-full ${isLocked ? 'opacity-60 grayscale' : ''}`}
+    >
+      {isPro && (
+          <div className={`absolute top-1 right-1 ${isLocked ? 'text-amber-500' : 'text-blue-500'}`}>
+              <Crown size={12} fill="currentColor"/>
+          </div>
+      )}
+      <div className={`p-2 rounded-xl ${colorClass} bg-opacity-10`}>
+         <Icon size={20} className={colorClass.replace('bg-', 'text-')} />
+      </div>
+      <span className="text-[11px] font-bold text-slate-700 text-center leading-tight">{label}</span>
+    </button>
+  );
+
+  // --- LOGIC HELPER VARIABLES (PENTING) ---
+  const isBusinessUser = profile?.account_type === 'business';
+  const isOrgUser = profile?.account_type === 'organization';
+  
+  // User Personal itu mencakup 'personal' (Free) DAN 'personal_pro' (Paid Personal)
+  const isPersonalUser = ['personal', 'personal_pro'].includes(profile?.account_type);
+  
+  // Cek spesifik apakah dia PRO Personal (buat membedakan fitur yg kebuka)
+  const isProPersonal = profile?.account_type === 'personal_pro';
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-24 relative">
+    <div className="min-h-screen bg-[#F8FAFC] font-sans pb-28 relative">
       
-      {/* --- OVERLAY NOTIFIKASI (SMART ADVISOR) --- */}
-      {showNotif && (
-        <div className="absolute top-16 right-4 left-4 z-50 animate-fade-in-up">
-           {/* Backdrop buat nutup kalau diklik luar */}
-           <div className="fixed inset-0 z-40" onClick={() => setShowNotif(false)}></div>
-           
-           <div className="bg-white rounded-2xl shadow-2xl border border-gray-100 p-5 relative z-50">
-              {/* Panah kecil ke atas */}
-              <div className="absolute -top-2 right-6 w-4 h-4 bg-white transform rotate-45 border-t border-l border-gray-100"></div>
-              
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                  🤖 Kata Juragan
-                </h3>
-                <button onClick={() => { setAiTips([]); handleBellClick(); }} className="text-xs text-brand-600 font-bold hover:underline bg-brand-50 px-2 py-1 rounded-lg">
-                  Refresh ↻
-                </button>
-              </div>
+      {/* HEADER */}
+      <div className={`${getThemeColor()} pb-20 pt-8 px-6 rounded-b-[2.5rem] relative overflow-hidden transition-colors duration-500`}>
+         <div className="absolute top-0 left-0 w-full h-full bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10"></div>
+         
+         <div className="relative z-10 flex justify-between items-start mb-6">
+            <div className="flex items-center gap-3">
+               <div className="bg-white/20 p-2 rounded-xl backdrop-blur-sm border border-white/10">
+                  {profile?.account_type === 'business' ? <Briefcase className="text-white" size={24}/> : 
+                   profile?.account_type === 'organization' ? <Users className="text-white" size={24}/> : 
+                   <Sparkles className="text-white" size={24}/>}
+               </div>
+               
+               <div>
+                  <div onClick={toggleMode} className="flex items-center gap-1.5 cursor-pointer group">
+                      <p className="text-white/80 text-xs font-medium mb-0.5 group-hover:text-white transition">
+                        {activeMode === 'BUSINESS' ? 'Mode Bisnis' : 
+                         activeMode === 'ORGANIZATION' ? 'Mode Organisasi' : 'Mode Pribadi'}
+                      </p>
+                      {/* Kalau Personal (Free/Pro) jangan kasih tombol switch, tapi upsell kalau diklik */}
+                      {!isPersonalUser && (
+                          <RefreshCcw size={10} className="text-white/70 group-hover:text-white group-hover:rotate-180 transition-transform duration-500"/>
+                      )}
+                  </div>
+                  <h1 className="text-lg font-bold text-white leading-tight truncate max-w-[200px]">
+                     {activeMode === 'PERSONAL' ? profile?.full_name : (profile?.entity_name || profile?.full_name)}
+                  </h1>
+               </div>
+            </div>
+            
+            <div className="flex gap-3">
+               <button onClick={handleAiAdvice} className="relative p-2 bg-white/10 rounded-full text-white hover:bg-white/20 transition">
+                  <Bell size={20} />
+                  {!showNotif && <span className="absolute top-2 right-2 w-2 h-2 bg-red-400 rounded-full border border-white animate-pulse"></span>}
+               </button>
+               <button onClick={handleLogout} className="p-2 bg-white/10 rounded-full text-red-200 hover:bg-red-500/20 hover:text-red-100 transition">
+                  <LogOut size={20} />
+               </button>
+            </div>
+         </div>
 
-              {loadingTips ? (
-                <div className="py-8 text-center">
-                  <div className="w-10 h-10 border-4 border-brand-500 border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-                  <p className="text-sm font-medium text-gray-600 animate-pulse">{loadingText}</p>
+         <div className="text-center text-white relative z-10">
+            <p className="text-white/80 text-sm mb-1">
+                {activeMode === 'PERSONAL' ? 'Dompet Pribadi' : 'Kas Operasional'}
+            </p>
+            <h2 className="text-4xl font-extrabold tracking-tight mb-2">
+               {loading ? '...' : formatIDR(summary.balance)}
+            </h2>
+            
+            {/* TAMPILAN STATUS AKUN DI HEADER */}
+            {profile?.account_type === 'personal' && (
+               <div onClick={() => setShowUpsell(true)} className="inline-flex items-center gap-1 bg-white/20 px-3 py-1 rounded-full text-[10px] font-bold border border-white/30 cursor-pointer hover:bg-white/30 transition">
+                  <span>🚀 Upgrade Fitur</span>
+                  <ChevronRight size={12}/>
+               </div>
+            )}
+            
+            {/* Kalau PRO Personal, Tampilkan Badge Sultan */}
+            {profile?.account_type === 'personal_pro' && (
+               <div className="inline-flex items-center gap-1 bg-amber-400/20 px-3 py-1 rounded-full text-[10px] font-bold border border-amber-400/50 text-amber-100">
+                  <Crown size={12} fill="currentColor" className="text-amber-300"/>
+                  <span>Personal Pro</span>
+               </div>
+            )}
+
+            {!isPersonalUser && activeMode === 'PERSONAL' && (
+               <div onClick={toggleMode} className="inline-flex items-center gap-1 bg-white/20 px-3 py-1 rounded-full text-[10px] font-bold border border-white/30 cursor-pointer hover:bg-white/30 transition">
+                  <Briefcase size={12}/>
+                  <span>Kembali ke Bisnis</span>
+               </div>
+            )}
+         </div>
+      </div>
+
+      {/* CARD SUMMARY */}
+      <div className="px-6 -mt-12 relative z-20">
+         <div className="bg-white p-4 rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100 flex justify-between items-center">
+            <div className="flex-1 flex flex-col items-center border-r border-slate-100">
+               <div className="flex items-center gap-1 text-green-500 text-xs font-bold mb-1"><ArrowDownLeft size={14}/> Pemasukan</div>
+               <span className="font-bold text-slate-800">{formatIDR(summary.income)}</span>
+            </div>
+            <div className="flex-1 flex flex-col items-center">
+               <div className="flex items-center gap-1 text-red-500 text-xs font-bold mb-1"><ArrowUpRight size={14}/> Pengeluaran</div>
+               <span className="font-bold text-slate-800">{formatIDR(summary.expense)}</span>
+            </div>
+         </div>
+      </div>
+
+      {/* ZONA INTI (AKSI CEPAT) */}
+      <div className="px-6 mt-8">
+         <h3 className="text-slate-900 font-bold text-base mb-3">Aksi Cepat</h3>
+         <div className="grid grid-cols-4 gap-3">
+            {/* Logic Tombol Scan/Voice: 
+                - Kalau Personal (Free/Pro) -> Tampil Mahkota. 
+                - Bedanya: Kalau Pro, limitnya unlimited (diatur di backend/logic scan).
+                - Disini kita set isPro=true biar visualnya konsisten ada mahkotanya buat user personal. 
+            */}
+            <MenuCard icon={ScanLine} label="Scan" onClick={() => navigate('/scan')} colorClass="bg-indigo-50 text-indigo-600" isPro={isPersonalUser} isLocked={false} />
+            <MenuCard icon={Mic} label="Suara" onClick={() => navigate('/voice')} colorClass="bg-purple-50 text-purple-600" isPro={isPersonalUser} isLocked={false} />
+            <MenuCard icon={Keyboard} label="Input" onClick={() => navigate('/manual-input')} colorClass="bg-teal-50 text-teal-600"/>
+            <MenuCard icon={BarChart3} label="Analisa" onClick={() => navigate('/analytics')} colorClass="bg-blue-50 text-blue-600"/>
+         </div>
+      </div>
+
+      {/* ZONA SPESIFIK */}
+      <div className="px-6 mt-6">
+         
+         {activeMode === 'BUSINESS' && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                <div className="flex justify-between items-center mb-3">
+                    <h3 className="text-slate-900 font-bold text-base">Menu Bisnis</h3>
+                    <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-bold">Juragan</span>
                 </div>
-              ) : (
-                <div className="space-y-3">
-                  {aiTips.map((tip, idx) => (
-                    <div key={idx} className={`p-3 rounded-xl border flex gap-3 items-start ${idx === 0 ? 'bg-blue-50 border-blue-100' : 'bg-gray-50 border-gray-100'}`}>
-                      <div className="text-lg mt-0.5 select-none">
-                          {idx === 0 ? '🧐' : idx === 1 ? '💡' : '🚀'}
-                      </div>
-                      <p className="text-sm text-gray-700 leading-snug font-medium">{tip}</p>
+                <div className="grid grid-cols-4 gap-3">
+                    <MenuCard icon={BookOpenCheck} label="Jurnal" onClick={() => navigate('/journal-process')} colorClass="bg-indigo-50 text-indigo-600"/>
+                    <MenuCard icon={ClipboardList} label="Laporan" onClick={() => navigate('/reports-menu')} colorClass="bg-rose-50 text-rose-600"/>
+                    <MenuCard icon={Package} label="Stok" onClick={() => navigate('/stock')} colorClass="bg-orange-50 text-orange-600"/>
+                    <MenuCard icon={LayoutGrid} label="Lainnya" onClick={() => setShowMoreMenu(true)} colorClass="bg-slate-50 text-slate-600"/>
+                </div>
+            </motion.div>
+         )}
+
+         {activeMode === 'ORGANIZATION' && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                <div className="flex justify-between items-center mb-3">
+                    <h3 className="text-slate-900 font-bold text-base">Menu Organisasi</h3>
+                    <span className="text-[10px] bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-bold">Admin</span>
+                </div>
+                <div className="grid grid-cols-4 gap-3">
+                    <MenuCard icon={BookOpenCheck} label="Jurnal" onClick={() => navigate('/journal-process')} colorClass="bg-indigo-50 text-indigo-600"/>
+                    <MenuCard icon={ClipboardList} label="Laporan" onClick={() => navigate('/reports-menu')} colorClass="bg-rose-50 text-rose-600"/>
+                    <MenuCard icon={Users} label="Anggota" onClick={() => navigate('/members')} colorClass="bg-cyan-50 text-cyan-600"/>
+                    <MenuCard icon={LayoutGrid} label="Lainnya" onClick={() => setShowMoreMenu(true)} colorClass="bg-slate-50 text-slate-600"/>
+                </div>
+            </motion.div>
+         )}
+
+         {activeMode === 'PERSONAL' && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                <div className="flex justify-between items-center mb-3">
+                    <h3 className="text-slate-900 font-bold text-base">Menu Pribadi</h3>
+                </div>
+                <div className="grid grid-cols-4 gap-3">
+                    <MenuCard icon={PiggyBank} label="Budget" onClick={() => navigate('/budget')} colorClass="bg-pink-50 text-pink-600"/>
+                    <MenuCard icon={Target} label="Goals" onClick={() => navigate('/goals')} colorClass="bg-emerald-50 text-emerald-600"/>
+                    <MenuCard icon={Landmark} label="Tagihan" onClick={() => navigate('/bills')} colorClass="bg-violet-50 text-violet-600"/>
+                    <MenuCard icon={LayoutGrid} label="Lainnya" onClick={() => setShowMoreMenu(true)} colorClass="bg-slate-50 text-slate-600"/>
+                </div>
+            </motion.div>
+         )}
+      </div>
+
+      {/* TRANSAKSI TERAKHIR */}
+      <div className="px-6 mt-8 mb-4">
+         <div className="flex justify-between items-center mb-4">
+            <h3 className="text-slate-900 font-bold text-base">Riwayat Terbaru</h3>
+            <span onClick={() => navigate('/transactions')} className="text-indigo-600 text-xs font-bold cursor-pointer hover:underline">Lihat Semua</span>
+         </div>
+         <div className="flex flex-col gap-3">
+            {loading ? (
+               <p className="text-center text-slate-400 text-sm py-4">Memuat data...</p>
+            ) : transactions.length === 0 ? (
+               <div className="text-center py-8 bg-white rounded-2xl border border-slate-100 border-dashed">
+                  <p className="text-4xl mb-2">🍃</p>
+                  <p className="text-slate-400 text-sm">Belum ada transaksi.</p>
+               </div>
+            ) : (
+               transactions.map((t, idx) => (
+                  <div key={idx} className="bg-white p-4 rounded-2xl border border-slate-50 shadow-sm flex justify-between items-center hover:bg-slate-50 transition">
+                     <div className="flex items-center gap-3">
+                        <div className={`p-3 rounded-xl ${t.type === 'income' ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>
+                           {t.type === 'income' ? <ArrowDownLeft size={18}/> : <ArrowUpRight size={18}/>}
+                        </div>
+                        <div>
+                           <p className="text-sm font-bold text-slate-800 truncate w-32">{t.merchant || 'Transaksi'}</p>
+                           <p className="text-xs text-slate-400 capitalize">{t.category}</p>
+                        </div>
+                     </div>
+                     <span className={`font-bold text-sm ${t.type === 'income' ? 'text-green-600' : 'text-slate-800'}`}>
+                        {t.type === 'income' ? '+' : '-'} {formatIDR(t.total_amount)}
+                     </span>
+                  </div>
+               ))
+            )}
+         </div>
+      </div>
+
+      {/* MODAL UPSELL (MARKETING) */}
+      <AnimatePresence>
+        {showUpsell && (
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm" onClick={() => setShowUpsell(false)}>
+                <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }} transition={{ type: "spring", damping: 25, stiffness: 300 }} className="w-full max-w-sm bg-white rounded-3xl shadow-2xl p-6 overflow-hidden relative" onClick={e => e.stopPropagation()}>
+                    <div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-b-[50%] scale-150 -translate-y-10 z-0"></div>
+                    <div className="relative z-10 flex flex-col items-center text-center mt-4">
+                        <div className="w-20 h-20 bg-white rounded-full p-1.5 shadow-xl mb-4 flex items-center justify-center relative">
+                            <div className="absolute inset-0 bg-amber-100 rounded-full animate-ping opacity-30"></div>
+                            <div className="w-full h-full bg-amber-100 rounded-full flex items-center justify-center text-amber-500 relative z-10">
+                                <Crown size={40} fill="currentColor"/>
+                            </div>
+                        </div>
+                        <h2 className="text-2xl font-extrabold text-slate-900 mb-2">Buka Akses Sultan! 👑</h2>
+                        <p className="text-slate-500 text-sm mb-6 leading-relaxed">
+                            Kelola Bisnis & Organisasi tanpa batas. Fitur profesional untuk level-up usahamu.
+                        </p>
+                        <div className="w-full bg-slate-50 rounded-xl p-4 mb-6 space-y-3 border border-slate-100 text-left">
+                            <div className="flex items-center gap-3 text-sm text-slate-700">
+                                <CheckCircle2 size={18} className="text-green-500 shrink-0"/> <span>Manajemen <b>Stok & Gudang</b></span>
+                            </div>
+                            <div className="flex items-center gap-3 text-sm text-slate-700">
+                                <CheckCircle2 size={18} className="text-green-500 shrink-0"/> <span>Buat <b>Invoice & Tagihan</b> Otomatis</span>
+                            </div>
+                            <div className="flex items-center gap-3 text-sm text-slate-700">
+                                <CheckCircle2 size={18} className="text-green-500 shrink-0"/> <span><b>Laporan Keuangan</b> Lengkap (PDF)</span>
+                            </div>
+                            <div className="flex items-center gap-3 text-sm text-slate-700">
+                                <CheckCircle2 size={18} className="text-green-500 shrink-0"/> <span>Kelola <b>Karyawan & Anggota</b></span>
+                            </div>
+                        </div>
+                        <button onClick={() => navigate('/upgrade')} className="w-full py-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 hover:scale-[1.02] transition flex items-center justify-center gap-2 relative overflow-hidden group">
+                            <span className="relative flex items-center gap-2">Upgrade Sekarang <Rocket size={18}/></span>
+                        </button>
+                        <button onClick={() => setShowUpsell(false)} className="mt-4 text-sm font-bold text-slate-400 hover:text-slate-600 transition">Nanti Saja</button>
                     </div>
-                  ))}
-                  <p className="text-[10px] text-gray-400 text-center mt-2 italic">
-                    *Juragan menganalisa 30 hari terakhir.
-                  </p>
-                </div>
-              )}
-           </div>
-        </div>
-      )}
+                </motion.div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
-      {/* --- HEADER DASHBOARD --- */}
-      <div className="bg-white p-6 rounded-b-3xl shadow-sm">
-        <div className="flex justify-between items-center mb-6">
-          <div>
-            <p className="text-gray-400 text-sm">Selamat Pagi,</p>
-            <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold text-gray-800 truncate max-w-[150px]">
-                {user?.user_metadata?.full_name || 'Juragan'} 👋
-              </h1>
-              {/* TOMBOL UPGRADE */}
-              <button 
-                onClick={() => navigate('/upgrade')}
-                className="bg-yellow-100 text-yellow-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-yellow-300 flex items-center gap-1 active:scale-95 transition"
-              >
-                👑 PRO
-              </button>
-            </div>
-          </div>
-          
-          <div className="flex items-center gap-2">
-            {/* TOMBOL LONCENG */}
-            <button 
-              onClick={handleBellClick} 
-              className={`relative p-2 rounded-full transition ${showNotif ? 'bg-brand-100 text-brand-600' : 'bg-gray-50 hover:bg-gray-100'}`}
-            >
-              <span className="text-xl">🔔</span>
-              {/* Dot merah kalau belum dibuka */}
-              {aiTips.length === 0 && !loadingTips && !showNotif && (
-                <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border border-white animate-ping"></span>
-              )}
-            </button>
-
-            <button onClick={signOut} className="text-xs text-red-500 font-bold ml-1 border border-red-100 px-3 py-1.5 rounded-full hover:bg-red-50 transition">
-              Keluar
-            </button>
-          </div>
-        </div>
-
-        {/* Card Resume Keuangan */}
-        <div className="bg-gray-900 text-white p-6 rounded-2xl shadow-xl shadow-gray-200 mb-4 relative overflow-hidden">
-          <div className="absolute -right-5 -top-5 w-24 h-24 bg-white opacity-10 rounded-full blur-xl"></div>
-          <div className="absolute -left-5 -bottom-5 w-24 h-24 bg-brand-500 opacity-20 rounded-full blur-xl"></div>
-          
-          <p className="text-gray-400 text-xs mb-1 font-medium tracking-wide">PENGELUARAN BULAN INI</p>
-          
-          <h2 className="text-3xl font-bold tracking-tight mb-4">
-            {loading ? '...' : formatIDR(totalExpense)}
-          </h2>
-          
-          <div className="relative pt-1">
-            <div className="flex mb-2 items-center justify-between">
-              <span className="text-xs font-semibold inline-block text-red-300">Penggunaan</span>
-              <span className="text-xs font-semibold inline-block text-gray-400">Hemat Pangkal Kaya!</span>
-            </div>
-            <div className="overflow-hidden h-1.5 mb-1 text-xs flex rounded bg-gray-700">
-              <div style={{ width: "35%" }} className="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-gradient-to-r from-green-400 to-brand-500"></div>
-            </div>
-          </div>
-        </div>
-
-        {/* --- BAGIAN BAWAH DASHBOARD (Split Tombol Laporan) --- */}
-        <div className="px-6 mb-6">
-            <h3 className="font-bold text-gray-700 mb-4 text-sm uppercase tracking-wider">Laporan & Analisa</h3>
-            <div className="grid grid-cols-2 gap-4">
-                {/* Tombol Analisa (Grafik) */}
-                <button 
-                  onClick={() => navigate('/analytics')}
-                  className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200 flex flex-col justify-center h-24 hover:border-brand-300 transition"
-                >
-                  <span className="text-2xl mb-1">📈</span>
-                  <span className="font-bold text-gray-800 text-sm">Analisa Grafik</span>
-                </button>
-
-                {/* TOMBOL BARU: LAPORAN KEUANGAN (MENU GRID) */}
-                <button 
-                  onClick={() => navigate('/reports-menu')}
-                  className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200 flex flex-col justify-center h-24 hover:border-indigo-300 transition"
-                >
-                  <span className="text-2xl mb-1">📚</span>
-                  <span className="font-bold text-gray-800 text-sm">Laporan Akuntansi</span>
-                </button>
-            </div>
-        </div>
-      </div>
-
-      {/* --- MENU AKSES FITUR --- */}
-      <div className="p-6">
-        <h3 className="font-bold text-gray-700 mb-4 text-sm uppercase tracking-wider">Aksi Cepat</h3>
-        
-        {/* Ubah grid-cols-2 jadi grid-cols-3 biar muat 3 tombol */}
-        <div className="grid grid-cols-3 gap-3">
-          
-          <button onClick={() => navigate('/voice')} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center hover:bg-brand-50 hover:border-brand-200 transition group active:scale-95">
-            <span className="text-3xl mb-2 group-hover:scale-110 transition">🎙️</span>
-            <span className="font-bold text-xs text-gray-800 text-center">Voice</span>
-          </button>
-          
-          <button onClick={() => navigate('/scan')} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center hover:bg-brand-50 hover:border-brand-200 transition group active:scale-95">
-            <span className="text-3xl mb-2 group-hover:scale-110 transition">📸</span>
-            <span className="font-bold text-xs text-gray-800 text-center">Scan</span>
-          </button>
-
-          {/* TOMBOL BARU: PEMBUKUAN */}
-          <button onClick={() => navigate('/journal-process')} className="bg-indigo-50 p-4 rounded-2xl shadow-sm border border-indigo-100 flex flex-col items-center hover:bg-indigo-100 transition group active:scale-95">
-            <span className="text-3xl mb-2 group-hover:scale-110 transition">⚙️</span>
-            <span className="font-bold text-xs text-indigo-800 text-center leading-tight">Proses<br/>Jurnal</span>
-          </button>
-
-        </div>
-      </div>
-
-      {/* --- LIST TRANSAKSI REAL --- */}
-      <div className="px-6">
-        <div className="flex justify-between items-end mb-4">
-           <h3 className="font-bold text-gray-700 text-sm uppercase tracking-wider">Riwayat Terbaru</h3>
-           <span onClick={() => navigate('/transactions')} className="text-xs text-brand-600 font-bold cursor-pointer hover:underline bg-brand-50 px-2 py-1 rounded">
-             Lihat Semua
-           </span>
-        </div>
-        
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 divide-y divide-gray-50 min-h-[100px] mb-6">
-          {loading ? (
-            <div className="p-6 text-center text-gray-400 text-sm animate-pulse">Sedang memuat data...</div>
-          ) : transactions.length === 0 ? (
-            <div className="p-8 text-center flex flex-col items-center">
-                <span className="text-4xl mb-2">🍃</span>
-                <p className="text-gray-400 text-sm">Belum ada transaksi bulan ini.</p>
-            </div>
-          ) : (
-            transactions.map((t) => (
-              <div key={t.id} className="p-4 flex justify-between items-center hover:bg-gray-50 transition">
-                <div className="flex gap-4 items-center overflow-hidden">
-                  <div className={`p-3 rounded-xl text-xl flex-shrink-0 ${t.type === 'income' ? 'bg-green-50' : 'bg-red-50'}`}>
-                    {t.type === 'income' ? '💰' : '🛒'}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="font-bold text-gray-800 text-sm truncate">{t.merchant || 'Tanpa Nama'}</p>
-                    <p className="text-xs text-gray-400 capitalize truncate">{t.category} • {new Date(t.date).toLocaleDateString('id-ID', {day: 'numeric', month: 'short'})}</p>
-                  </div>
-                </div>
-                <span className={`font-bold text-sm whitespace-nowrap ${t.type === 'income' ? 'text-green-600' : 'text-red-500'}`}>
-                  {t.type === 'income' ? '+' : '-'}{formatIDR(t.total_amount)}
-                </span>
+      {/* BOTTOM SHEET MENU */}
+      <AnimatePresence>
+        {showMoreMenu && (
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowMoreMenu(false)} className="fixed inset-0 z-40 bg-slate-900/60 backdrop-blur-sm" />
+            <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={{ type: "spring", damping: 30, stiffness: 300 }} className="fixed bottom-0 left-0 right-0 z-50 w-full md:max-w-[410px] mx-auto h-[85vh] bg-[#F8FAFC] rounded-t-[2rem] shadow-2xl flex flex-col overflow-hidden">
+              <div className="px-6 pt-4 pb-4 bg-[#F8FAFC] z-10 shrink-0 border-b border-slate-100/50">
+                 <div className="w-12 h-1.5 bg-slate-300 rounded-full mx-auto mb-6"></div>
+                 <div className="flex justify-between items-center px-1">
+                    <div>
+                        <h3 className="font-extrabold text-xl text-slate-900">Fitur Lainnya</h3>
+                        <p className="text-slate-500 text-sm mt-1">
+                           Menu Mode {activeMode === 'BUSINESS' ? 'Bisnis' : activeMode === 'ORGANIZATION' ? 'Organisasi' : 'Pribadi'}
+                        </p>
+                    </div>
+                    <button onClick={() => setShowMoreMenu(false)} className="p-2 bg-slate-200 text-slate-600 rounded-full hover:bg-slate-300 transition"><X size={20}/></button>
+                 </div>
               </div>
-            ))
-          )}
-        </div>
-      </div>
+
+              <div className="flex-1 overflow-y-auto p-6 pb-20">
+                 <div className="grid grid-cols-3 gap-4">
+                    
+                    {activeMode === 'BUSINESS' && (
+                       <>
+                          <MenuCard icon={Receipt} label="Invoice" onClick={() => navigate('/invoice')} colorClass="bg-red-50 text-red-600"/>
+                          <MenuCard icon={Calculator} label="Hutang" onClick={() => navigate('/debt')} colorClass="bg-cyan-50 text-cyan-600"/>
+                          <MenuCard icon={Users} label="Karyawan" onClick={() => navigate('/employees')} colorClass="bg-emerald-50 text-emerald-600"/>
+                          <MenuCard icon={Landmark} label="Pajak" onClick={() => navigate('/tax')} colorClass="bg-violet-50 text-violet-600"/>
+                          <MenuCard icon={Package} label="Gudang" onClick={() => navigate('/warehouse')} colorClass="bg-amber-50 text-amber-600"/>
+                          <MenuCard icon={Target} label="Target" onClick={() => navigate('/targets')} colorClass="bg-lime-50 text-lime-600"/>
+
+                          <div className="col-span-3 mt-6 mb-2 flex items-center gap-3">
+                             <div className="h-px bg-slate-200 flex-1"></div>
+                             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Menu Mode Pribadi</p>
+                             <div className="h-px bg-slate-200 flex-1"></div>
+                          </div>
+                          <MenuCard icon={PiggyBank} label="Budget" onClick={() => handleSwitchNav('/budget', 'PERSONAL')} colorClass="bg-pink-50 text-pink-600"/>
+                          <MenuCard icon={Target} label="Goals" onClick={() => handleSwitchNav('/goals', 'PERSONAL')} colorClass="bg-emerald-50 text-emerald-600"/>
+                          <MenuCard icon={Landmark} label="Tagihan" onClick={() => handleSwitchNav('/bills', 'PERSONAL')} colorClass="bg-violet-50 text-violet-600"/>
+                          <MenuCard icon={TrendingUp} label="Investasi" onClick={() => handleSwitchNav('/invest', 'PERSONAL')} colorClass="bg-emerald-50 text-emerald-600"/>
+                          <MenuCard icon={Calendar} label="Event" onClick={() => handleSwitchNav('/events', 'PERSONAL')} colorClass="bg-purple-50 text-purple-600"/>
+                       </>
+                    )}
+
+                    {activeMode === 'ORGANIZATION' && (
+                       <>
+                          <MenuCard icon={HandCoins} label="Iuran" onClick={() => navigate('/dues')} colorClass="bg-pink-50 text-pink-600"/>
+                          <MenuCard icon={ScrollText} label="Proposal" onClick={() => navigate('/proposals')} colorClass="bg-yellow-50 text-yellow-600"/>
+                          <MenuCard icon={Target} label="Program" onClick={() => navigate('/programs')} colorClass="bg-lime-50 text-lime-600"/>
+                          <MenuCard icon={Package} label="Aset" onClick={() => navigate('/inventory')} colorClass="bg-orange-50 text-orange-600"/>
+
+                          <div className="col-span-3 mt-6 mb-2 flex items-center gap-3">
+                             <div className="h-px bg-slate-200 flex-1"></div>
+                             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Menu Mode Pribadi</p>
+                             <div className="h-px bg-slate-200 flex-1"></div>
+                          </div>
+                          <MenuCard icon={PiggyBank} label="Budget" onClick={() => handleSwitchNav('/budget', 'PERSONAL')} colorClass="bg-pink-50 text-pink-600"/>
+                          <MenuCard icon={Target} label="Goals" onClick={() => handleSwitchNav('/goals', 'PERSONAL')} colorClass="bg-emerald-50 text-emerald-600"/>
+                          <MenuCard icon={Landmark} label="Tagihan" onClick={() => handleSwitchNav('/bills', 'PERSONAL')} colorClass="bg-violet-50 text-violet-600"/>
+                          <MenuCard icon={TrendingUp} label="Investasi" onClick={() => handleSwitchNav('/invest', 'PERSONAL')} colorClass="bg-emerald-50 text-emerald-600"/>
+                          <MenuCard icon={Calendar} label="Event" onClick={() => handleSwitchNav('/events', 'PERSONAL')} colorClass="bg-purple-50 text-purple-600"/>
+                       </>
+                    )}
+
+                    {activeMode === 'PERSONAL' && (
+                       <>
+                          <MenuCard icon={Landmark} label="Tagihan" onClick={() => navigate('/bills')} colorClass="bg-violet-50 text-violet-600"/>
+                          <MenuCard icon={TrendingUp} label="Investasi" onClick={() => navigate('/invest')} colorClass="bg-emerald-50 text-emerald-600"/>
+                          <MenuCard icon={Calendar} label="Event" onClick={() => navigate('/events')} colorClass="bg-purple-50 text-purple-600"/>
+                          
+                          {/* SKENARIO 1: SUDAH PUNYA AKUN BISNIS/ORG (Termasuk PRO PERSONAL gak masuk sini karena dia masih 'personal') */}
+                          {!isPersonalUser && (
+                              <>
+                                <div className="col-span-3 mt-6 mb-2 flex items-center gap-3">
+                                    <div className="h-px bg-slate-200 flex-1"></div>
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                                        Menu Mode {isOrgUser ? 'Organisasi' : 'Bisnis'}
+                                    </p>
+                                    <div className="h-px bg-slate-200 flex-1"></div>
+                                </div>
+                                {isBusinessUser ? (
+                                    <>
+                                        <MenuCard icon={Receipt} label="Invoice" onClick={() => handleSwitchNav('/invoice', 'BUSINESS')} colorClass="bg-red-50 text-red-600"/>
+                                        <MenuCard icon={Package} label="Stok" onClick={() => handleSwitchNav('/stock', 'BUSINESS')} colorClass="bg-orange-50 text-orange-600"/>
+                                        <MenuCard icon={BookOpenCheck} label="Jurnal" onClick={() => handleSwitchNav('/journal-process', 'BUSINESS')} colorClass="bg-indigo-50 text-indigo-600"/>
+                                        <MenuCard icon={Users} label="Karyawan" onClick={() => handleSwitchNav('/employees', 'BUSINESS')} colorClass="bg-emerald-50 text-emerald-600"/>
+                                        <MenuCard icon={ClipboardList} label="Laporan" onClick={() => handleSwitchNav('/reports-menu', 'BUSINESS')} colorClass="bg-rose-50 text-rose-600"/>
+                                    </>
+                                ) : (
+                                    <>
+                                        <MenuCard icon={HandCoins} label="Iuran" onClick={() => handleSwitchNav('/dues', 'ORGANIZATION')} colorClass="bg-pink-50 text-pink-600"/>
+                                        <MenuCard icon={Users} label="Anggota" onClick={() => handleSwitchNav('/members', 'ORGANIZATION')} colorClass="bg-cyan-50 text-cyan-600"/>
+                                        <MenuCard icon={BookOpenCheck} label="Jurnal" onClick={() => handleSwitchNav('/journal-process', 'ORGANIZATION')} colorClass="bg-indigo-50 text-indigo-600"/>
+                                        <MenuCard icon={ClipboardList} label="Laporan" onClick={() => handleSwitchNav('/reports-menu', 'ORGANIZATION')} colorClass="bg-rose-50 text-rose-600"/>
+                                    </>
+                                )}
+                              </>
+                          )}
+
+                          {/* SKENARIO 2: USER PERSONAL (Free & Pro) -> Ditawarin Bisnis */}
+                          {isPersonalUser && (
+                              <>
+                                <div className="col-span-3 mt-6 mb-2 flex items-center gap-3">
+                                    <div className="h-px bg-slate-200 flex-1"></div>
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fitur Bisnis (Pro)</p>
+                                    <div className="h-px bg-slate-200 flex-1"></div>
+                                </div>
+                                <MenuCard icon={Package} label="Stok" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                                <MenuCard icon={Receipt} label="Invoice" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                                <MenuCard icon={BookOpenCheck} label="Jurnal" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                                <MenuCard icon={ClipboardList} label="Laporan" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                                <MenuCard icon={Users} label="Karyawan" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+
+                                <div className="col-span-3 mt-6 mb-2 flex items-center gap-3">
+                                    <div className="h-px bg-slate-200 flex-1"></div>
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fitur Organisasi (Pro)</p>
+                                    <div className="h-px bg-slate-200 flex-1"></div>
+                                </div>
+                                <MenuCard icon={HandCoins} label="Iuran" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                                <MenuCard icon={ScrollText} label="Proposal" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                                <MenuCard icon={Target} label="Program" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                                <MenuCard icon={Package} label="Aset" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                                <MenuCard icon={Users} label="Anggota" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                              </>
+                          )}
+                       </>
+                    )}
+                 </div>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
     </div>
   );

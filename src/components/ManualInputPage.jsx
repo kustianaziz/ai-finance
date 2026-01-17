@@ -1,36 +1,32 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthProvider';
-import { processVoiceInput } from '../utils/aiLogic';
-import { checkUsageLimit } from '../utils/subscriptionLogic';
-import { ArrowLeft, Mic, Square, X, User, Building2 } from 'lucide-react';
+import { processVoiceInput } from '../utils/aiLogic'; // Logic AI tetap dipakai
+// HAPUS IMPORT checkUsageLimit KARENA GRATIS
+import { ArrowLeft, Keyboard, X, User, Building2, Send } from 'lucide-react';
 
-export default function VoiceSim() {
+export default function ManualInputPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
   // STATE
-  const [isListening, setIsListening] = useState(false);
-  const [transcript, setTranscript] = useState(''); 
-  const [status, setStatus] = useState('idle'); 
-  const [aiResult, setAiResult] = useState(null); // Array transaksi
+  const [inputText, setInputText] = useState('');
+  const [status, setStatus] = useState('idle'); // idle, processing, success
+  const [aiResult, setAiResult] = useState(null);
   const [saving, setSaving] = useState(false);
 
   // STATE MODE GLOBAL (Otomatis)
-  const [activeMode, setActiveMode] = useState('PERSONAL'); 
+  const [activeMode, setActiveMode] = useState('PERSONAL');
 
-  // Ref Speech
-  const recognitionRef = useRef(null);
-
-  // 1. CEK MODE SAAT LOAD (SAMA SEPERTI SCAN)
+  // 1. CEK MODE SAAT LOAD
   useEffect(() => {
     fetchUserMode();
   }, []);
 
   const fetchUserMode = async () => {
     if (!user) return;
-    const savedMode = localStorage.getItem('app_mode'); 
+    const savedMode = localStorage.getItem('app_mode');
     
     if (savedMode) {
         setActiveMode(savedMode);
@@ -44,78 +40,26 @@ export default function VoiceSim() {
     }
   };
 
-  // 2. SETUP SPEECH RECOGNITION
-  useEffect(() => {
-    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      const recognition = new SpeechRecognition();
-      
-      recognition.lang = 'id-ID'; 
-      recognition.continuous = true; 
-      recognition.interimResults = false; 
-
-      recognition.onresult = (event) => {
-        const lastResultIndex = event.results.length - 1;
-        const transcriptChunk = event.results[lastResultIndex][0].transcript.trim();
-        if (transcriptChunk) {
-            setTranscript(prevText => prevText ? `${prevText} ${transcriptChunk}` : transcriptChunk);
-        }
-      };
-
-      recognition.onerror = (event) => {
-        if (event.error === 'no-speech') return; 
-        setIsListening(false);
-      };
-
-      recognition.onend = () => setIsListening(false);
-      recognitionRef.current = recognition;
-    } else {
-      alert("Browser/HP ini gak support fitur suara.");
-    }
-  }, []);
-
-  // --- TOGGLE MIC ---
-  const toggleListening = async () => {
-    if (isListening) {
-      if (recognitionRef.current) recognitionRef.current.stop();
-      setIsListening(false);
-    } else {
-      const limitCheck = await checkUsageLimit(user.id, 'VOICE');
-      if (!limitCheck.allowed) {
-        if(window.confirm(limitCheck.message + "\nMau upgrade sekarang?")) navigate('/upgrade');
-        return;
-      }
-
-      setTranscript(''); 
-      setAiResult(null); 
-      setStatus('listening');
-      if (recognitionRef.current) recognitionRef.current.start();
-      setIsListening(true);
-    }
-  };
-
-  // --- PROSES KE AI ---
-  const handleProcessAI = async () => {
-    if (!transcript.trim()) {
-      alert("Belum ada suara yang masuk, Gan!");
+  // --- PROSES AI (GRATIS / UNLIMITED) ---
+  const handleProcess = async () => {
+    if (!inputText.trim()) {
+      alert("Ketik dulu transaksinya, Juragan!");
       return;
     }
 
-    if (isListening) {
-      if (recognitionRef.current) recognitionRef.current.stop();
-      setIsListening(false);
-    }
+    // --- BAGIAN CEK LIMIT SUDAH DIHAPUS DISINI ---
+    // User bebas pakai fitur ini sepuasnya.
 
     setStatus('processing');
 
     try {
-      const result = await processVoiceInput(transcript);
+      // Kita pakai fungsi processVoiceInput karena fungsinya sama: String -> JSON Transaksi
+      const result = await processVoiceInput(inputText);
       
       // --- LOGIC SMART DEFAULT ---
       const enrichedResult = result.map(txn => ({
           ...txn,
           type: txn.type || 'expense', 
-          
           // OTOMATIS SESUAI MODE AKTIF
           allocation_type: (activeMode === 'BUSINESS' || activeMode === 'ORGANIZATION') ? 'BUSINESS' : 'PERSONAL' 
       }));
@@ -128,14 +72,14 @@ export default function VoiceSim() {
     }
   };
 
-  // --- HELPER UNTUK EDIT DATA DALAM LIST ---
+  // --- HELPER UPDATE DATA ---
   const updateTransaction = (index, field, value) => {
       const updatedList = [...aiResult];
       updatedList[index][field] = value;
       setAiResult(updatedList);
   };
 
-  // --- SIMPAN KE DATABASE ---
+  // --- SIMPAN KE DB ---
   const handleSave = async () => {
     if (!user || !aiResult) return;
     setSaving(true);
@@ -148,12 +92,10 @@ export default function VoiceSim() {
             user_id: user.id,
             merchant: txn.merchant,
             total_amount: txn.total_amount,
-            
             type: txn.type,
-            allocation_type: txn.allocation_type, // Ini penting
-            
+            allocation_type: txn.allocation_type,
             category: txn.category,
-            receipt_url: "Voice V5 (Global Mode)",
+            receipt_url: "Manual Text V1 (Free Unlimited)", // Tandai sebagai fitur gratis
             is_ai_generated: true,
             is_journalized: false
           }])
@@ -182,6 +124,13 @@ export default function VoiceSim() {
     }
   };
 
+  // TEMA WARNA DINAMIS
+  const themeColor = activeMode === 'PERSONAL' ? 'pink' : 'blue';
+  const btnColor = activeMode === 'PERSONAL' ? 'bg-pink-600' : 'bg-blue-600';
+  const lightBg = activeMode === 'PERSONAL' ? 'bg-pink-50' : 'bg-blue-50';
+  const borderColor = activeMode === 'PERSONAL' ? 'border-pink-200' : 'border-blue-200';
+  const textColor = activeMode === 'PERSONAL' ? 'text-pink-600' : 'text-blue-600';
+
   return (
     <div className="flex flex-col h-screen bg-slate-50 relative font-sans">
       
@@ -193,10 +142,8 @@ export default function VoiceSim() {
         
         {/* Indikator Mode */}
         <div className="flex flex-col items-center">
-            <h1 className="font-bold text-lg text-slate-800">Voice Input</h1>
-            <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide border ${
-                activeMode === 'PERSONAL' ? 'bg-pink-50 border-pink-200 text-pink-600' : 'bg-blue-50 border-blue-200 text-blue-600'
-            }`}>
+            <h1 className="font-bold text-lg text-slate-800">Input Teks AI</h1>
+            <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide border ${lightBg} ${borderColor} ${textColor}`}>
                 {activeMode === 'PERSONAL' ? <User size={10} /> : <Building2 size={10} />}
                 <span>Mode {activeMode === 'PERSONAL' ? 'Pribadi' : activeMode === 'BUSINESS' ? 'Bisnis' : 'Organisasi'}</span>
             </div>
@@ -208,68 +155,49 @@ export default function VoiceSim() {
       {/* CONTENT AREA */}
       <div className="flex-1 p-6 flex flex-col items-center overflow-y-auto pb-32">
         
-        {/* VISUALISASI MIC */}
         {status !== 'success' && (
             <>
-                <div className="relative mb-8 mt-8">
-                  {/* Animasi Ping */}
-                  {isListening && (
-                      <span className={`absolute inset-0 rounded-full animate-ping opacity-75 ${
-                          activeMode === 'PERSONAL' ? 'bg-pink-200' : 'bg-blue-200'
-                      }`}></span>
-                  )}
-                  
-                  <button 
-                    onClick={toggleListening}
-                    className={`relative z-10 w-24 h-24 rounded-full flex items-center justify-center shadow-xl transition-all active:scale-95 ${
-                      isListening ? 'bg-red-500 text-white scale-110 shadow-red-200' : 
-                      activeMode === 'PERSONAL' ? 'bg-pink-600 text-white hover:bg-pink-700 shadow-pink-200' : 'bg-blue-600 text-white hover:bg-blue-700 shadow-blue-200'
-                    }`}
-                  >
-                    {isListening ? <Square size={32} fill="currentColor"/> : <Mic size={36}/>}
-                  </button>
+                {/* ICON UTAMA */}
+                <div className={`w-20 h-20 rounded-full flex items-center justify-center text-4xl shadow-xl mb-6 mt-8 ${btnColor} text-white shadow-${themeColor}-200`}>
+                    <Keyboard size={36}/>
                 </div>
 
-                <p className="text-slate-500 text-sm mb-6 font-medium text-center max-w-[250px]">
-                  {isListening ? 'Sedang mendengarkan...' : `Klik mic dan sebutkan pengeluaran ${activeMode === 'PERSONAL' ? 'pribadi' : 'bisnis'} Anda.`}
+                <p className="text-slate-500 text-sm mb-6 font-medium text-center max-w-[280px]">
+                  Ketik transaksi secara natural, AI akan merapikannya untuk {activeMode === 'PERSONAL' ? 'catatan pribadimu' : 'laporan bisnismu'}.
                 </p>
 
-                {/* TEXT AREA TRANSCRIPT */}
-                <div className="w-full bg-white p-5 rounded-3xl border border-slate-200 shadow-sm mb-6 flex-1 min-h-[180px] flex flex-col relative overflow-hidden focus-within:ring-2 focus-within:ring-blue-100 transition-all">
+                {/* TEXT AREA INPUT */}
+                <div className="w-full bg-white p-5 rounded-3xl border border-slate-200 shadow-sm mb-6 flex-1 min-h-[200px] flex flex-col relative focus-within:ring-2 focus-within:ring-blue-100 transition-all">
                     <textarea 
                         className="w-full h-full bg-transparent outline-none text-slate-700 text-lg resize-none placeholder-slate-300 font-medium leading-relaxed"
-                        placeholder='Contoh: "Beli bensin 20 ribu dan kopi 10 ribu"'
-                        value={transcript}
-                        onChange={(e) => setTranscript(e.target.value)}
+                        placeholder='Contoh: "Beli kertas A4 1 rim 50rb dan Tinta Printer 100rb buat stok kantor"'
+                        value={inputText}
+                        onChange={(e) => setInputText(e.target.value)}
                     ></textarea>
                     
                     {/* Clear Button */}
-                    {transcript && (
-                        <button onClick={() => setTranscript('')} className="absolute top-2 right-2 p-1.5 bg-slate-100 rounded-full text-slate-400 hover:text-slate-600">
+                    {inputText && (
+                        <button onClick={() => setInputText('')} className="absolute top-2 right-2 p-1.5 bg-slate-100 rounded-full text-slate-400 hover:text-slate-600">
                             <X size={14}/>
                         </button>
                     )}
                 </div>
 
                 {/* TOMBOL PROSES */}
-                {transcript.length > 3 && status !== 'processing' && (
-                    <button 
-                        onClick={handleProcessAI}
-                        className={`w-full py-4 text-white rounded-2xl font-bold text-lg shadow-lg hover:brightness-110 transition active:scale-95 flex items-center justify-center gap-2 animate-slide-up ${
-                            activeMode === 'PERSONAL' ? 'bg-pink-600 shadow-pink-200' : 'bg-blue-600 shadow-blue-200'
-                        }`}
-                    >
-                        Proses Sekarang <ArrowLeft className="rotate-180" size={20}/>
-                    </button>
-                )}
+                <button 
+                    onClick={handleProcess}
+                    disabled={!inputText.trim() || status === 'processing'}
+                    className={`w-full py-4 text-white rounded-2xl font-bold text-lg shadow-lg hover:brightness-110 transition active:scale-95 flex items-center justify-center gap-2 ${btnColor} disabled:bg-slate-300 disabled:cursor-not-allowed`}
+                >
+                    {status === 'processing' ? 'Memproses...' : 'Proses Tulisan'} 
+                    {status !== 'processing' && <Send size={20}/>}
+                </button>
 
-                {/* LOADING */}
+                {/* LOADING INDICATOR */}
                 {status === 'processing' && (
                     <div className="text-center animate-pulse mt-4 flex flex-col items-center gap-2">
-                        <div className={`w-8 h-8 border-4 border-t-transparent rounded-full animate-spin ${
-                             activeMode === 'PERSONAL' ? 'border-pink-500' : 'border-blue-500'
-                        }`}></div>
-                        <p className="text-slate-500 font-bold text-sm">AI sedang mencatat...</p>
+                        <div className={`w-8 h-8 border-4 border-t-transparent rounded-full animate-spin border-${themeColor}-500`}></div>
+                        <p className="text-slate-500 font-bold text-sm">AI sedang membaca tulisanmu...</p>
                     </div>
                 )}
             </>
@@ -281,16 +209,12 @@ export default function VoiceSim() {
         <div className="absolute inset-0 bg-slate-50 z-20 flex flex-col animate-slide-up overflow-hidden">
            
            {/* HEADER HASIL */}
-           <div className={`p-6 border-b shadow-sm z-10 flex justify-between items-center ${
-               activeMode === 'PERSONAL' ? 'bg-pink-50 border-pink-100' : 'bg-blue-50 border-blue-100'
-           }`}>
+           <div className={`p-6 border-b shadow-sm z-10 flex justify-between items-center ${lightBg} ${borderColor}`}>
                <div>
-                   <h2 className={`font-bold text-lg flex items-center gap-2 ${
-                       activeMode === 'PERSONAL' ? 'text-pink-800' : 'text-blue-800'
-                   }`}>
-                       ✅ Hasil Catatan ({aiResult.length})
+                   <h2 className={`font-bold text-lg flex items-center gap-2 ${activeMode === 'PERSONAL' ? 'text-pink-800' : 'text-blue-800'}`}>
+                       ✅ Hasil Deteksi ({aiResult.length})
                    </h2>
-                   <p className="text-xs text-slate-500">Cek kembali sebelum disimpan.</p>
+                   <p className="text-xs text-slate-500">Silakan koreksi jika ada yang salah.</p>
                </div>
                <div className={`p-2 rounded-full ${activeMode === 'PERSONAL' ? 'bg-pink-100 text-pink-600' : 'bg-blue-100 text-blue-600'}`}>
                    {activeMode === 'PERSONAL' ? <User size={20}/> : <Building2 size={20}/>}
@@ -309,7 +233,7 @@ export default function VoiceSim() {
                             value={txn.merchant}
                             onChange={(e) => updateTransaction(idx, 'merchant', e.target.value)}
                             className="font-bold text-slate-800 text-lg border-b border-transparent focus:border-blue-500 outline-none w-[60%] bg-transparent"
-                            placeholder="Nama Item"
+                            placeholder="Nama Item/Toko"
                           />
                           <p className="font-bold text-xl text-slate-800">
                               Rp {txn.total_amount.toLocaleString()}
@@ -365,19 +289,6 @@ export default function VoiceSim() {
                               <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">▼</div>
                           </div>
                       </div>
-                      
-                      {/* BARIS 3: ITEMS DETAIL */}
-                      {txn.items && txn.items.length > 0 && (
-                          <div className="space-y-2 pt-2 border-t border-slate-100">
-                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Detail</p>
-                              {txn.items.map((item, i) => (
-                                  <div key={i} className="flex justify-between text-xs text-slate-600">
-                                      <span>{item.name}</span>
-                                      <span className="font-bold">{item.price.toLocaleString()}</span>
-                                  </div>
-                              ))}
-                          </div>
-                      )}
                   </div>
               ))}
            </div>
@@ -386,7 +297,7 @@ export default function VoiceSim() {
            <div className="p-5 border-t border-slate-200 bg-white sticky bottom-0 shadow-[0_-4px_10px_-1px_rgba(0,0,0,0.05)] z-20">
                <div className="flex gap-3">
                    <button 
-                     onClick={() => { setStatus('idle'); setTranscript(''); setAiResult(null); }}
+                     onClick={() => { setStatus('idle'); setAiResult(null); }}
                      className="flex-1 py-3.5 border border-slate-200 text-slate-600 rounded-xl font-bold hover:bg-slate-50 transition"
                    >
                      Ulang
@@ -394,9 +305,7 @@ export default function VoiceSim() {
                    <button 
                      onClick={handleSave}
                      disabled={saving}
-                     className={`flex-[2] py-3.5 text-white rounded-xl font-bold shadow-lg hover:brightness-110 transition flex justify-center items-center gap-2 ${
-                         activeMode === 'PERSONAL' ? 'bg-pink-600 shadow-pink-200' : 'bg-blue-600 shadow-blue-200'
-                     }`}
+                     className={`flex-[2] py-3.5 text-white rounded-xl font-bold shadow-lg hover:brightness-110 transition flex justify-center items-center gap-2 ${btnColor}`}
                    >
                      {saving ? 'Menyimpan...' : 'Simpan Semua'}
                    </button>
