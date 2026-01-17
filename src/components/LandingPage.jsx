@@ -489,10 +489,10 @@ export default function LandingPage() {
               </button>
             </div>
           </motion.div>
-
+        
           <motion.div initial={{ opacity: 0, y: 60 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4, duration: 0.8 }} className="mt-20 max-w-6xl mx-auto relative">
               <div className="relative z-10 hover:scale-[1.01] transition-transform duration-700 group">
-                  <img src="src/assets/landing/hero-mockup.png" alt="Tampilan Dashboard dan Laporan Rapikus" className="relative w-full h-auto drop-shadow-2xl rounded-[2rem] border-4 border-white/50" />
+                  <img src="/landing/hero-mockup.png" alt="Tampilan Dashboard dan Laporan Rapikus" className="relative w-full h-auto drop-shadow-2xl rounded-[2rem] border-4 border-white/50" />
               </div>
           </motion.div>
         </div>
