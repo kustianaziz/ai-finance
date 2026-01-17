@@ -10,7 +10,7 @@ import {
   Instagram, Twitter, Youtube, Facebook, ArrowUp
 } from 'lucide-react';
 
-// --- DATA FITUR CORE ---
+// --- DATA FITUR CORE --- // Update path gambar vercel
 const coreFeatures = [
     { 
         image: "/landing/feat-scan.png", 
