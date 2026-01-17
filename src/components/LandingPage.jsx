@@ -13,22 +13,22 @@ import {
 // --- DATA FITUR CORE ---
 const coreFeatures = [
     { 
-        image: "src/assets/landing/feat-scan.png", 
+        image: "/landing/feat-scan.png", 
         title: "Scan Struk Sat-Set 📸", 
         desc: "Gak jaman ketik manual! Foto struk belanjaanmu, AI Rapikus otomatis membaca item, total, dan tanggal. Ajaib & Akurat." 
     },
     { 
-        image: "src/assets/landing/feat-voice.png", 
+        image: "/landing/feat-voice.png", 
         title: "Input Suara (Voice AI) 🎙️", 
         desc: "Lagi nyetir? Cukup bilang: 'Beli bensin 20 ribu'. Asisten AI kami langsung mencatatnya ke pos pengeluaran yang benar." 
     },
     { 
-        image: "src/assets/landing/feat-wallet.png",
+        image: "/landing/feat-wallet.png",
         title: "Pemisah Saldo Otomatis 🛡️", 
         desc: "Jangan campur uang dapur sama uang modal! Dompet bisnis dan pribadi terpisah secara tegas biar cashflow aman." 
     },
     { 
-        image: "src/assets/landing/feat-chart.png",
+        image: "/landing/feat-chart.png",
         title: "Dashboard Visual Real-time", 
         desc: "Cek grafik cantik yang jujur. Produk mana yang paling laris? Di mana bocornya uangmu? Semua terjawab instan." 
     },
