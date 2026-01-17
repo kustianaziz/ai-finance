@@ -25,9 +25,13 @@ import CashFlowPage from './components/CashFlowPage';
 import JournalReportPage from './components/JournalReportPage';
 import LedgerPage from './components/LedgerPage';
 import ManualInputPage from './components/ManualInputPage';
+import BudgetPage from './pages/BudgetPage';
+import GoalsPage from './pages/GoalsPage';
+import BillsPage from './pages/BillsPage';
 
 // Import Halaman Penampung (Biar link kosong gak error)
 import NotFoundPage from "./components/NotFoundPage"; 
+import EventsPage from './pages/EventsPage';
 
 // --- KOMPONEN SATPAM (ROUTE GUARD) ---
 
@@ -144,10 +148,11 @@ function App() {
                     <Route path="/proposals" element={<NotFoundPage />} />
                     <Route path="/programs" element={<NotFoundPage />} />
                     <Route path="/inventory" element={<NotFoundPage />} />
-                    <Route path="/goals" element={<NotFoundPage />} />
-                    <Route path="/bills" element={<NotFoundPage />} />
+                    <Route path="/goals" element={<GoalsPage />} />
+                    <Route path="/bills" element={<BillsPage />} />
                     <Route path="/invest" element={<NotFoundPage />} />
-                    <Route path="/budget" element={<NotFoundPage />} />
+                    <Route path="/budget" element={<BudgetPage />} />
+                    <Route path="/events" element={<EventsPage />} />
 
                 </Route>
             </Route>

@@ -69,84 +69,88 @@ export const processImageInput = async (fileBase64, mimeType) => {
   }
 };
 
-// --- FUNGSI ADVISOR (OPTIMALISASI HITUNG DULUAN) ---
+// Fungsi utama untuk generate insight
 export const generateFinancialInsights = async (transactions) => {
-  // 1. HITUNG MANUAL DI JAVASCRIPT (Super Cepat & Akurat)
-  // Jangan suruh AI ngitung, dia lambat & sering salah hitung.
-  
-  let totalIncome = 0;
-  let totalExpense = 0;
-  const categoryMap = {}; // Buat nyari kategori paling boros
+    // Simulasi delay biar berasa mikir
+    await new Promise(resolve => setTimeout(resolve, 1500));
 
-  transactions.forEach(t => {
-    if (t.type === 'income') {
-        totalIncome += t.total_amount;
-    } else {
-        totalExpense += t.total_amount;
-        // Rekap per kategori
-        categoryMap[t.category] = (categoryMap[t.category] || 0) + t.total_amount;
+    if (!transactions || transactions.length === 0) {
+        return ["Data transaksi masih kosong. Yuk mulai catat pengeluaranmu hari ini! 📝"];
     }
-  });
 
-  // Cari biang kerok (Kategori Paling Boros)
-  let topCategory = "Tidak ada";
-  let topCategoryAmount = 0;
-  
-  for (const [cat, amount] of Object.entries(categoryMap)) {
-    if (amount > topCategoryAmount) {
-        topCategory = cat;
-        topCategoryAmount = amount;
-    }
-  }
+    // 1. Hitung Data Dasar
+    let income = 0;
+    let expense = 0;
+    const categoryTotals = {};
 
-  const balance = totalIncome - totalExpense;
-  const statusKeuangan = balance >= 0 ? "AMAN (Surplus)" : "BAHAYA (Defisit/Boncos)";
-
-  // 2. SUSUN LAPORAN SINGKAT BUAT AI
-  // Kita cuma kirim teks pendek ini, jadi AI bacanya kilat! ⚡
-  const summaryContext = `
-    - Total Pemasukan: Rp ${totalIncome.toLocaleString('id-ID')}
-    - Total Pengeluaran: Rp ${totalExpense.toLocaleString('id-ID')}
-    - Sisa Saldo: Rp ${balance.toLocaleString('id-ID')}
-    - Status: ${statusKeuangan}
-    - Paling Boros di: ${topCategory} (Habis Rp ${topCategoryAmount.toLocaleString('id-ID')})
-  `;
-
-  try {
-    const model = genAI.getGenerativeModel({ 
-        model: MODEL_NAME, // Tetap Gemini 2.5
-        generationConfig: { 
-            responseMimeType: "application/json", // Output langsung JSON (Cepat)
-            temperature: 0.7 // Kreativitas sedang biar sarannya luwes
+    transactions.forEach(t => {
+        const amount = Number(t.total_amount);
+        if (t.type === 'income') {
+            income += amount;
+        } else {
+            expense += amount;
+            // Grouping pengeluaran per kategori
+            if (!categoryTotals[t.category]) categoryTotals[t.category] = 0;
+            categoryTotals[t.category] += amount;
         }
     });
-    
-    // 3. PROMPT "JURAGAN" (Persona yang kuat)
-    const prompt = `
-    Berperanlah sebagai "Juragan", mentor keuangan yang bicaranya santai, gaul (Indonesian slang), to the point, dan agak pedas kalau user boros.
-    
-    Laporan Keuangan User Bulan Ini:
-    ${summaryContext}
 
-    Berikan 3 saran singkat (Max 2 kalimat per saran) dalam format Array JSON:
-    1. [Evaluasi] Komentari status saldo (Puji kalau surplus, sindir kalau boncos).
-    2. [Sorotan] Bahas kenapa dia boros di "${topCategory}" dan kasih tips kurangi itu.
-    3. [Tantangan] Satu aksi nyata (Action Plan) yang harus dilakukan besok.
+    const balance = income - expense;
+    const insights = [];
 
-    Output JSON Murni: ["Saran 1...", "Saran 2...", "Saran 3..."]
-    `;
-    
-    const result = await model.generateContent(prompt);
-    
-    // Karena Native JSON, gak perlu regex replace aneh-aneh
-    return JSON.parse(result.response.text());
+    // --- LOGIC CERDAS (AI RULES) ---
 
-  } catch (error) {
-    console.error("Advisor Error:", error);
-    return [
-        "Waduh, Juragan lagi sibuk ngitung duit nih.",
-        "Coba cek koneksi internet kamu ya.",
-        "Intinya: Jangan besar pasak daripada tiang!"
-    ];
-  }
+    // A. KONDISI SALDO MINUS (Critical)
+    if (balance < 0) {
+        // Insight 1: Diagnosa Teknis (Lupa Catat)
+        insights.push(`Waduh, saldo tercatat minus ${formatIDR(Math.abs(balance))}. 🤔 Coba cek lagi, apakah ada Pemasukan yang lupa dicatat? Kalau ada, yuk input dulu biar datanya akurat.`);
+        
+        // Insight 2: Solusi Keuangan (Realita)
+        insights.push(`Tapi kalau datanya sudah benar, artinya pengeluaran bulan ini lebih besar dari pemasukan. 🚨 Yuk rem dulu pengeluaran yang sifatnya keinginan, fokus ke kebutuhan pokok aja.`);
+    } 
+    // B. KONDISI SALDO TIPIS (< 10% Pemasukan)
+    else if (balance > 0 && balance < (income * 0.1)) {
+        insights.push(`Hati-hati, sisa saldomu tinggal sedikit (${formatIDR(balance)}). Usahakan jangan belanja impulsif dulu sampai gajian berikutnya ya! 🛡️`);
+    }
+    // C. KONDISI SEHAT
+    else if (balance > (income * 0.3)) {
+        insights.push(`Keren! Cashflow kamu sehat banget (Surplus > 30%). 🌟 Pertimbangkan untuk alokasikan kelebihan dana ini ke Tabungan atau Investasi.`);
+    }
+
+    // D. ANALISA KATEGORI TERBOROS (Top Spender)
+    if (expense > 0) {
+        // Cari kategori dengan pengeluaran terbesar
+        const sortedCategories = Object.entries(categoryTotals).sort((a, b) => b[1] - a[1]);
+        const topCategory = sortedCategories[0]; // [NamaKategori, Jumlah]
+
+        if (topCategory) {
+            const catName = topCategory[0];
+            const catAmount = topCategory[1];
+            const percent = Math.round((catAmount / expense) * 100);
+
+            // Variasi pesan berdasarkan kategori
+            if (['makanan', 'jajan', 'kopi'].includes(catName.toLowerCase())) {
+                insights.push(`Tercatat ${percent}% pengeluaranmu habis buat ${catName} (${formatIDR(catAmount)}). 🍔 Mungkin bisa dikurangi dikit frekuensi jajan di luar? Masak sendiri lebih hemat lho.`);
+            } else if (['transport', 'bensin'].includes(catName.toLowerCase())) {
+                insights.push(`Biaya ${catName} lumayan tinggi nih (${formatIDR(catAmount)}). Coba cek rute atau pertimbangkan opsi transportasi yang lebih efisien.`);
+            } else {
+                insights.push(`Pengeluaran terbesarmu bulan ini ada di kategori '${catName}' sebesar ${formatIDR(catAmount)}. Pastikan ini memang kebutuhan prioritas ya. 🧐`);
+            }
+        }
+    }
+
+    // E. ANALISA FREKUENSI TRANSAKSI
+    if (transactions.length > 10) {
+        const expenseCount = transactions.filter(t => t.type === 'expense').length;
+        if (expenseCount > 8) {
+            insights.push(`Wah, aktif banget! Ada ${expenseCount} kali transaksi keluar baru-baru ini. Rajin mencatat itu awal yang baik buat atur keuangan. Pertahankan! 💪`);
+        }
+    }
+
+    return insights;
+};
+
+// Helper Format Rupiah
+const formatIDR = (num) => {
+    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(num);
 };

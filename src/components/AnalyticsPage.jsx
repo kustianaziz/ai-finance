@@ -6,7 +6,7 @@ import {
   PieChart, Pie, Cell, BarChart, Bar, LineChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, AreaChart, Area
 } from 'recharts';
-import { User, Building2, PieChart as PieIcon, ArrowLeft, Calendar } from 'lucide-react';
+import { User, Building2, PieChart as PieIcon, ArrowLeft, Calendar, Crown } from 'lucide-react';
 
 export default function AnalyticsPage() {
   const navigate = useNavigate();
@@ -17,7 +17,7 @@ export default function AnalyticsPage() {
   // --- STATE FILTER & MODE ---
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [viewMode, setViewMode] = useState('ALL'); 
+  const [viewMode, setViewMode] = useState('PERSONAL'); 
   const [accountType, setAccountType] = useState('personal');
 
   // --- STATE CHART TAB ---
@@ -53,16 +53,30 @@ export default function AnalyticsPage() {
     setStartDate(firstDay);
     setEndDate(lastDay);
 
-    const savedMode = localStorage.getItem('app_mode');
-    if (savedMode) setViewMode(savedMode);
-    
     fetchProfileType();
   }, []);
 
   const fetchProfileType = async () => {
       if(!user) return;
       const { data } = await supabase.from('profiles').select('account_type').eq('id', user.id).single();
-      if(data) setAccountType(data.account_type);
+      
+      if(data) {
+          setAccountType(data.account_type);
+          
+          // --- LOGIC PERBAIKAN DI SINI ---
+          // Kita cek apakah akun ini punya hak akses Bisnis/Org (WHITELIST)
+          const hasBusinessAccess = ['business', 'organization'].includes(data.account_type);
+
+          if (hasBusinessAccess) {
+              // Jika Bisnis/Org -> Boleh load mode terakhir
+              const savedMode = localStorage.getItem('app_mode');
+              if (savedMode) setViewMode(savedMode);
+              else setViewMode('ALL');
+          } else {
+              // Jika 'personal' ATAU 'personal_pro' -> PAKSA mode PERSONAL
+              setViewMode('PERSONAL');
+          }
+      }
   };
 
   // 2. FETCH DATA
@@ -305,6 +319,9 @@ export default function AnalyticsPage() {
   };
   const theme = getTheme();
 
+  // Logic Deteksi Hak Akses
+  const hasBusinessAccess = ['business', 'organization'].includes(accountType);
+
   return (
     <div className="min-h-screen bg-gray-50 pb-24 font-sans">
       
@@ -320,18 +337,29 @@ export default function AnalyticsPage() {
             </div>
         </div>
 
-        {/* MODE SWITCHER */}
-        <div className="bg-gray-100 p-1 rounded-xl flex">
-            <button onClick={() => setViewMode('PERSONAL')} className={`flex-1 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all ${viewMode === 'PERSONAL' ? 'bg-white text-pink-600 shadow-sm' : 'text-gray-500'}`}>
-                <User size={14}/> Pribadi
-            </button>
-            <button onClick={() => setViewMode(accountType === 'organization' ? 'ORGANIZATION' : 'BUSINESS')} className={`flex-1 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all ${['BUSINESS', 'ORGANIZATION'].includes(viewMode) ? `bg-white text-${accountType === 'organization' ? 'teal' : 'blue'}-600 shadow-sm` : 'text-gray-500'}`}>
-                <Building2 size={14}/> {accountType === 'organization' ? 'Organisasi' : 'Bisnis'}
-            </button>
-            <button onClick={() => setViewMode('ALL')} className={`flex-1 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all ${viewMode === 'ALL' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500'}`}>
-                <PieIcon size={14}/> Gabungan
-            </button>
-        </div>
+        {/* MODE SWITCHER (KONDISIONAL STRICT) */}
+        {hasBusinessAccess ? (
+            // Jika akun BUSINESS atau ORGANIZATION -> Tampilkan Tab Switcher
+            <div className="bg-gray-100 p-1 rounded-xl flex">
+                <button onClick={() => setViewMode('PERSONAL')} className={`flex-1 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all ${viewMode === 'PERSONAL' ? 'bg-white text-pink-600 shadow-sm' : 'text-gray-500'}`}>
+                    <User size={14}/> Pribadi
+                </button>
+                <button onClick={() => setViewMode(accountType === 'organization' ? 'ORGANIZATION' : 'BUSINESS')} className={`flex-1 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all ${['BUSINESS', 'ORGANIZATION'].includes(viewMode) ? `bg-white text-${accountType === 'organization' ? 'teal' : 'blue'}-600 shadow-sm` : 'text-gray-500'}`}>
+                    <Building2 size={14}/> {accountType === 'organization' ? 'Organisasi' : 'Bisnis'}
+                </button>
+                <button onClick={() => setViewMode('ALL')} className={`flex-1 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all ${viewMode === 'ALL' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500'}`}>
+                    <PieIcon size={14}/> Gabungan
+                </button>
+            </div>
+        ) : (
+            // Jika Personal ATAU Personal_Pro -> Hanya Label Statis
+            <div className={`bg-pink-50 p-2 rounded-xl border border-pink-100 text-center flex items-center justify-center gap-2 ${accountType === 'personal_pro' ? 'border-amber-200 bg-amber-50' : ''}`}>
+                <span className={`text-xs font-bold ${accountType === 'personal_pro' ? 'text-amber-600' : 'text-pink-600'} flex items-center gap-2`}>
+                    {accountType === 'personal_pro' && <Crown size={14} fill="currentColor"/>}
+                    <User size={14}/> {accountType === 'personal_pro' ? 'Mode Personal Pro' : 'Mode Pribadi'}
+                </span>
+            </div>
+        )}
 
         {/* DATE FILTER */}
         <div className="flex gap-3 bg-gray-50 p-2 rounded-xl border border-gray-100">
