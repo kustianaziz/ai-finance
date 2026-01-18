@@ -6,34 +6,61 @@ const genAI = new GoogleGenerativeAI(API_KEY);
 // ABANG REQUEST TETAP PAKAI INI
 const MODEL_NAME = "gemini-2.5-flash"; 
 
-// --- FUNGSI VOICE ---
-export const processVoiceInput = async (text) => {
+// Helper untuk menyusun list kategori di Prompt
+const buildCategoryPrompt = (userCategories = []) => {
+    // List Baku
+    const defaultCats = ['Makanan', 'Transport', 'Belanja', 'Tagihan', 'Hiburan', 'Kesehatan', 'Lainnya'];
+    
+    // Gabung dengan kategori user, hilangkan duplikat, dan join jadi string
+    const allCats = [...new Set([...defaultCats, ...userCategories])];
+    return allCats.join(", ");
+};
+
+/// --- FUNGSI VOICE & TEXT (UPDATE: TERIMA KATEGORI USER) ---
+export const processVoiceInput = async (text, userCategories = []) => {
   try {
     const model = genAI.getGenerativeModel({ 
         model: MODEL_NAME,
-        // OPTIMASI: Paksa output JSON langsung (Lebih Cepat & Stabil)
         generationConfig: { responseMimeType: "application/json" }
     });
     
+    const today = new Date().toISOString().split('T')[0];
+    const categoryListString = buildCategoryPrompt(userCategories);
+
     const prompt = `
-    You are an expense tracker parser.
+    Role: Expense Tracker Parser.
+    Current Date: ${today} (YYYY-MM-DD).
     Input: "${text}"
-    Rule: Group items by location/merchant.
-    Output Schema: Array of objects [{ "merchant": string, "total_amount": number, "category": string, "type": "expense"|"income", "items": [{"name": string, "price": number}] }]
+    
+    ALLOWED CATEGORIES: [${categoryListString}]
+    
+    Tasks:
+    1. Extract transactions.
+    2. Detect Date (handle "kemarin", "lusa", etc.).
+    3. Categorize items using ONLY the "ALLOWED CATEGORIES" list above. Pick the most relevant one.
+    
+    Output Schema: 
+    Array of objects [{ 
+        "merchant": string, 
+        "total_amount": number, 
+        "date": string (YYYY-MM-DD),
+        "category": string, 
+        "type": "expense"|"income", 
+        "items": [{"name": string, "price": number}] 
+    }]
     `;
 
     const result = await model.generateContent(prompt);
-    // Karena sudah mode JSON, kita tidak perlu replace regex yang ribet
     return JSON.parse(result.response.text());
 
   } catch (error) {
-    console.error("Voice Error:", error);
-    throw new Error("Gagal proses suara.");
+    console.error("Voice/Text Error:", error);
+    throw new Error("Gagal proses input.");
   }
 };
 
-// --- FUNGSI VISION (SCAN) ---
-export const processImageInput = async (fileBase64, mimeType) => {
+// --- FUNGSI VISION (UPDATE: TERIMA KATEGORI USER) ---
+export const processImageInput = async (fileBase64, mimeType, userCategories = []) => {
   try {
     const model = genAI.getGenerativeModel({ 
         model: MODEL_NAME,
@@ -43,19 +70,27 @@ export const processImageInput = async (fileBase64, mimeType) => {
         }
     });
 
-    // PROMPT LEBIH RINGAN & CEPAT
-    // Kita HAPUS instruksi nebak allocation_type
+    const categoryListString = buildCategoryPrompt(userCategories);
+
     const prompt = `
     Analyze receipt image. Extract data strictly into this JSON structure:
     {
       "merchant": "Store Name",
+      "date": "YYYY-MM-DD", 
       "amount": Total Amount (number),
-      "category": "Food/Transport/Shopping/etc (Indonesian)",
+      "category": "CategoryString", 
       "type": "expense" or "income",
       "items": [
         { "name": "Item Name", "price": Item Price (number) }
       ]
     }
+    
+    ALLOWED CATEGORIES: [${categoryListString}]
+
+    RULES:
+    1. Look for the date. Convert to YYYY-MM-DD. If missing, return null.
+    2. For "category", choose the BEST MATCH from the "ALLOWED CATEGORIES" list provided above.
+    3. Do NOT create new categories outside that list.
     `;
     
     const imagePart = { inlineData: { data: fileBase64, mimeType: mimeType } };
@@ -63,91 +98,90 @@ export const processImageInput = async (fileBase64, mimeType) => {
     return JSON.parse(result.response.text());
 
   } catch (error) {
-    // ... error handling sama
     console.error("Vision Error:", error);
     throw new Error("Gagal analisa gambar.");
   }
 };
 
-// Fungsi utama untuk generate insight
+// --- FUNGSI GENERATE INSIGHT (MAJOR UPGRADE: REAL AI) ---
 export const generateFinancialInsights = async (transactions) => {
-    // Simulasi delay biar berasa mikir
-    await new Promise(resolve => setTimeout(resolve, 1500));
-
+    // 1. Cek Data Kosong
     if (!transactions || transactions.length === 0) {
         return ["Data transaksi masih kosong. Yuk mulai catat pengeluaranmu hari ini! 📝"];
     }
 
-    // 1. Hitung Data Dasar
-    let income = 0;
-    let expense = 0;
-    const categoryTotals = {};
+    try {
+        // 2. Siapkan Ringkasan Data untuk dikirim ke AI
+        // Kita tidak kirim semua raw object biar hemat token, kita format jadi string ringkas.
+        const summaryData = transactions.map(t => 
+            `- ${t.date.split('T')[0]}: ${t.type === 'income' ? '+' : '-'} ${formatIDR(t.total_amount)} (${t.category} @ ${t.merchant})`
+        ).join("\n");
 
-    transactions.forEach(t => {
-        const amount = Number(t.total_amount);
-        if (t.type === 'income') {
-            income += amount;
-        } else {
-            expense += amount;
-            // Grouping pengeluaran per kategori
-            if (!categoryTotals[t.category]) categoryTotals[t.category] = 0;
-            categoryTotals[t.category] += amount;
-        }
-    });
+        // Hitung total manual sekilas buat konteks prompt
+        let income = 0, expense = 0;
+        transactions.forEach(t => t.type === 'income' ? income += Number(t.total_amount) : expense += Number(t.total_amount));
+        const balance = income - expense;
 
-    const balance = income - expense;
-    const insights = [];
-
-    // --- LOGIC CERDAS (AI RULES) ---
-
-    // A. KONDISI SALDO MINUS (Critical)
-    if (balance < 0) {
-        // Insight 1: Diagnosa Teknis (Lupa Catat)
-        insights.push(`Waduh, saldo tercatat minus ${formatIDR(Math.abs(balance))}. 🤔 Coba cek lagi, apakah ada Pemasukan yang lupa dicatat? Kalau ada, yuk input dulu biar datanya akurat.`);
-        
-        // Insight 2: Solusi Keuangan (Realita)
-        insights.push(`Tapi kalau datanya sudah benar, artinya pengeluaran bulan ini lebih besar dari pemasukan. 🚨 Yuk rem dulu pengeluaran yang sifatnya keinginan, fokus ke kebutuhan pokok aja.`);
-    } 
-    // B. KONDISI SALDO TIPIS (< 10% Pemasukan)
-    else if (balance > 0 && balance < (income * 0.1)) {
-        insights.push(`Hati-hati, sisa saldomu tinggal sedikit (${formatIDR(balance)}). Usahakan jangan belanja impulsif dulu sampai gajian berikutnya ya! 🛡️`);
-    }
-    // C. KONDISI SEHAT
-    else if (balance > (income * 0.3)) {
-        insights.push(`Keren! Cashflow kamu sehat banget (Surplus > 30%). 🌟 Pertimbangkan untuk alokasikan kelebihan dana ini ke Tabungan atau Investasi.`);
-    }
-
-    // D. ANALISA KATEGORI TERBOROS (Top Spender)
-    if (expense > 0) {
-        // Cari kategori dengan pengeluaran terbesar
-        const sortedCategories = Object.entries(categoryTotals).sort((a, b) => b[1] - a[1]);
-        const topCategory = sortedCategories[0]; // [NamaKategori, Jumlah]
-
-        if (topCategory) {
-            const catName = topCategory[0];
-            const catAmount = topCategory[1];
-            const percent = Math.round((catAmount / expense) * 100);
-
-            // Variasi pesan berdasarkan kategori
-            if (['makanan', 'jajan', 'kopi'].includes(catName.toLowerCase())) {
-                insights.push(`Tercatat ${percent}% pengeluaranmu habis buat ${catName} (${formatIDR(catAmount)}). 🍔 Mungkin bisa dikurangi dikit frekuensi jajan di luar? Masak sendiri lebih hemat lho.`);
-            } else if (['transport', 'bensin'].includes(catName.toLowerCase())) {
-                insights.push(`Biaya ${catName} lumayan tinggi nih (${formatIDR(catAmount)}). Coba cek rute atau pertimbangkan opsi transportasi yang lebih efisien.`);
-            } else {
-                insights.push(`Pengeluaran terbesarmu bulan ini ada di kategori '${catName}' sebesar ${formatIDR(catAmount)}. Pastikan ini memang kebutuhan prioritas ya. 🧐`);
+        const model = genAI.getGenerativeModel({ 
+            model: MODEL_NAME,
+            generationConfig: { 
+                responseMimeType: "application/json" 
             }
-        }
-    }
+        });
 
-    // E. ANALISA FREKUENSI TRANSAKSI
-    if (transactions.length > 10) {
-        const expenseCount = transactions.filter(t => t.type === 'expense').length;
-        if (expenseCount > 8) {
-            insights.push(`Wah, aktif banget! Ada ${expenseCount} kali transaksi keluar baru-baru ini. Rajin mencatat itu awal yang baik buat atur keuangan. Pertahankan! 💪`);
-        }
-    }
+        // 3. Prompt Engineer yang Cerdas
+        // Kita minta AI jadi "Konsultan Keuangan Pribadi yang Santai tapi Tajam"
+        const prompt = `
+        Role: Kamu adalah asisten keuangan pribadi bernama "Rapikus AI".
+        Tone: Santai, suportif, bahasa Indonesia gaul tapi sopan, kadang pakai emoji.
+        Context:
+        - Total Pemasukan: ${formatIDR(income)}
+        - Total Pengeluaran: ${formatIDR(expense)}
+        - Sisa Saldo: ${formatIDR(balance)}
+        
+        Data Transaksi Terakhir:
+        ${summaryData}
 
-    return insights;
+        Tugas:
+        Analisa pola keuangan user dari data di atas. Jangan cuma baca angka, tapi cari Insight/Pola tersembunyi.
+        Berikan respon dalam format JSON Array of Strings.
+        
+        Aturan Insight:
+        1. Buat 2 sampai 3 kalimat insight pendek.
+        2. Jangan kaku. Jangan cuma bilang "Saldo kamu sekian".
+        3. Jika boros di kategori tertentu (misal sering jajan/kopi), tegor secara halus dan berikan saran.
+        4. Jika saldo minus, kasih warning keras tapi solutif.
+        5. Jika hemat/sehat, kasih pujian serta masukan untuk lebih di tingkatkan.
+        6. Sebutkan nama merchant jika itu mencolok (misal: "Sering banget ke Starbucks nih").
+
+        Contoh Output JSON:
+        ["Waduh, jajan kopi kamu minggu ini udah setara cicilan motor lho ☕", "Saldo aman, tapi hati-hati pengeluaran transport mulai bengkak 🚗"]
+        `;
+
+        const result = await model.generateContent(prompt);
+        const responseText = result.response.text();
+        
+        // Bersihkan formatting markdown json jika ada (kadang Gemini nambahin ```json)
+        const cleanJson = responseText.replace(/```json|```/g, '').trim();
+        
+        return JSON.parse(cleanJson);
+
+    } catch (error) {
+        console.error("AI Insight Error:", error);
+        // Fallback kalau AI Error/Limit Habis (Balik ke logic manual sederhana sebagai cadangan)
+        return getFallbackInsights(transactions);
+    }
+};
+
+// --- FALLBACK MANUAL (JAGA-JAGA KALAU API ERROR) ---
+const getFallbackInsights = (transactions) => {
+    let income = 0, expense = 0;
+    transactions.forEach(t => t.type === 'income' ? income += Number(t.total_amount) : expense += Number(t.total_amount));
+    const balance = income - expense;
+
+    if (balance < 0) return ["Waduh, pengeluaran lebih besar dari pemasukan nih! 🚨 Cek lagi pos pengeluaranmu."];
+    if (expense > income * 0.8) return ["Hati-hati, sisa saldomu menipis. Rem dulu jajannya ya! 🛡️"];
+    return ["Keuanganmu tercatat rapi. Terus pertahankan ya! 🌟"];
 };
 
 // Helper Format Rupiah

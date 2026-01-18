@@ -188,20 +188,28 @@ export default function Dashboard() {
       return 'bg-indigo-600'; 
   };
 
+  // --- LOGIC AI YANG SUDAH DIPERBAIKI (FILTER BULAN INI) ---
   const handleAiAdvice = async () => {
     setShowNotif(!showNotif);
     
+    // Hanya panggil AI jika belum ada tips
     if (!showNotif && aiTips.length === 0) {
         setLoadingTips(true);
         try {
+           const now = new Date();
+           // Ambil tanggal awal bulan ini (misal: 2026-01-01)
+           const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+
+           // Fetch transaksi HANYA dari awal bulan ini
            const { data: history } = await supabase.from('transaction_headers')
                 .select('*')
                 .eq('user_id', user.id)
-                .order('date', { ascending: false })
-                .limit(20);
+                .gte('date', startOfMonth) // Filter tanggal >= awal bulan
+                .order('date', { ascending: false }); // Urutkan terbaru
            
+           // Kirim data bulan ini ke AI
            const insights = await generateFinancialInsights(history || []);
-           setAiTips(insights.length ? insights : ["Belum cukup data. Yuk catat transaksi! 📝"]);
+           setAiTips(insights.length ? insights : ["Belum cukup data bulan ini. Yuk catat transaksi! 📝"]);
         } catch (e) { 
             console.error("AI Error:", e);
             setAiTips(["AI sedang sibuk. Coba lagi nanti! 😴"]); 
