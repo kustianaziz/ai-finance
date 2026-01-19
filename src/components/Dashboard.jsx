@@ -26,8 +26,6 @@ export default function Dashboard() {
   const [summary, setSummary] = useState({ income: 0, expense: 0, balance: 0 });
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(!profile); 
-  
-  // STATE BARU UNTUK BADGE TAGIHAN
   const [billAlert, setBillAlert] = useState(0);
   
   // --- GLOBAL MODE ---
@@ -42,19 +40,19 @@ export default function Dashboard() {
   const [aiTips, setAiTips] = useState([]);
   const [loadingTips, setLoadingTips] = useState(false);
 
-  // 1. INIT DATA
+  // 1. INIT DATA (Jalankan saat User / Mode berubah)
   useEffect(() => {
     if (user) {
         loadDashboardData();
     }
-  }, [user]);
+  }, [user, activeMode]); // <--- TAMBAHKAN activeMode SEBAGAI TRIGGER
 
   // 2. SAVE MODE CHANGES
   useEffect(() => {
     localStorage.setItem('app_mode', activeMode);
   }, [activeMode]);
 
-  // --- FUNGSI UTAMA (OPTIMIZED + BILLS CHECK) ---
+  // --- FUNGSI UTAMA (DIPERBAIKI: FILTER MODE) ---
   const loadDashboardData = async () => {
     try {
         if (!profile) setLoading(true); 
@@ -74,30 +72,47 @@ export default function Dashboard() {
                 
                 const isPersonalGroup = ['personal', 'personal_pro'].includes(data.account_type);
                 if (isPersonalGroup) {
-                    setActiveMode('PERSONAL');
-                    localStorage.setItem('app_mode', 'PERSONAL');
+                    // Paksa mode PERSONAL jika user tipe personal
+                    if (activeMode !== 'PERSONAL') setActiveMode('PERSONAL');
                 } else if (!localStorage.getItem('app_mode')) {
+                    // Set default mode untuk Business/Org jika belum ada cache
                     setActiveMode(data.account_type === 'business' ? 'BUSINESS' : 'ORGANIZATION');
                 }
             }
         }
 
-        // 2. FETCH DATA KEUANGAN & TAGIHAN (PARALLEL)
+        // --- FILTER QUERY BERDASARKAN MODE ---
+        // Mapping Mode App ke Nilai Database 'allocation_type'
+        // PERSONAL -> ['PERSONAL', 'PRIVE']
+        // BUSINESS -> ['BUSINESS', 'SALARY']
+        // ORGANIZATION -> ['BUSINESS', 'SALARY'] (Asumsi Org pakai struktur yg sama/mirip)
+        
+        let allocationFilter = [];
+        if (activeMode === 'PERSONAL') {
+            allocationFilter = ['PERSONAL', 'PRIVE'];
+        } else {
+            allocationFilter = ['BUSINESS', 'SALARY'];
+        }
+
+        // 2. FETCH DATA (PARALLEL)
         const [summaryRes, recentRes, billsRes] = await Promise.all([
-            // A. Ringkasan Saldo
+            // A. Ringkasan Saldo (FILTERED)
             supabase.from('transaction_headers')
                 .select('type, total_amount')
                 .eq('user_id', user.id)
-                .gte('date', startOfMonth),
+                .gte('date', startOfMonth)
+                .in('allocation_type', allocationFilter), // <--- FILTER PENTING
 
-            // B. Transaksi Terakhir
+            // B. Transaksi Terakhir (FILTERED)
             supabase.from('transaction_headers')
                 .select('*')
                 .eq('user_id', user.id)
+                .in('allocation_type', allocationFilter) // <--- FILTER PENTING
                 .order('date', { ascending: false })
                 .limit(5),
 
-            // C. Cek Tagihan (NEW)
+            // C. Cek Tagihan (Tagihan biasanya global user, tapi bisa difilter jika ada field type)
+            // Untuk saat ini tagihan kita anggap global per user (Personal Reminder)
             supabase.from('bills').select('*').eq('user_id', user.id)
         ]);
 
@@ -117,28 +132,23 @@ export default function Dashboard() {
             setTransactions(recentRes.data);
         }
 
-        // --- PROCESS BILL ALERT (NEW LOGIC) ---
+        // --- PROCESS BILL ALERT ---
         if (billsRes.data) {
             const today = new Date();
             const currentDay = today.getDate();
             const currentMonth = today.getMonth();
             const currentYear = today.getFullYear();
 
-            // Hitung tagihan yang: BELUM LUNAS + (Jatuh tempo < 3 hari atau sudah lewat)
             const alertCount = billsRes.data.filter(bill => {
                 let isPaid = false;
                 if (bill.last_paid_at) {
                     const paidDate = new Date(bill.last_paid_at);
-                    // Cek lunas bulan ini
                     if (paidDate.getMonth() === currentMonth && paidDate.getFullYear() === currentYear) {
                         isPaid = true;
                     }
                 }
-                
-                // Logic H-3 Warning
                 const daysUntilDue = bill.due_date - currentDay;
-                const isUrgent = daysUntilDue <= 3; // Termasuk yang minus (telat)
-
+                const isUrgent = daysUntilDue <= 3; 
                 return !isPaid && isUrgent;
             }).length;
 
@@ -188,28 +198,28 @@ export default function Dashboard() {
       return 'bg-indigo-600'; 
   };
 
-  // --- LOGIC AI YANG SUDAH DIPERBAIKI (FILTER BULAN INI) ---
+  // --- LOGIC AI TIPS (FILTERED BULAN INI + MODE) ---
   const handleAiAdvice = async () => {
     setShowNotif(!showNotif);
     
-    // Hanya panggil AI jika belum ada tips
     if (!showNotif && aiTips.length === 0) {
         setLoadingTips(true);
         try {
            const now = new Date();
-           // Ambil tanggal awal bulan ini (misal: 2026-01-01)
            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
-           // Fetch transaksi HANYA dari awal bulan ini
+           // Filter AI juga harus ikut Mode aktif agar insight-nya relevan
+           let allocationFilter = activeMode === 'PERSONAL' ? ['PERSONAL', 'PRIVE'] : ['BUSINESS', 'SALARY'];
+
            const { data: history } = await supabase.from('transaction_headers')
                 .select('*')
                 .eq('user_id', user.id)
-                .gte('date', startOfMonth) // Filter tanggal >= awal bulan
-                .order('date', { ascending: false }); // Urutkan terbaru
+                .gte('date', startOfMonth)
+                .in('allocation_type', allocationFilter) // <--- FILTER
+                .order('date', { ascending: false });
            
-           // Kirim data bulan ini ke AI
            const insights = await generateFinancialInsights(history || []);
-           setAiTips(insights.length ? insights : ["Belum cukup data bulan ini. Yuk catat transaksi! 📝"]);
+           setAiTips(insights.length ? insights : ["Belum cukup data bulan ini untuk mode ini. Yuk catat transaksi! 📝"]);
         } catch (e) { 
             console.error("AI Error:", e);
             setAiTips(["AI sedang sibuk. Coba lagi nanti! 😴"]); 
@@ -220,14 +230,19 @@ export default function Dashboard() {
   };
 
   const formatIDR = (num) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(num);
+  
+  // Format Tanggal Singkat (contoh: 20 Jan)
+  const formatDateShort = (dateString) => {
+      if (!dateString) return '';
+      const date = new Date(dateString);
+      return date.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
+  };
 
-  // UPDATE: MenuCard menerima props badgeCount
   const MenuCard = ({ icon: Icon, label, onClick, colorClass, isLocked = false, isPro = false, badgeCount = 0 }) => (
     <button 
       onClick={isLocked ? () => setShowUpsell(true) : onClick} 
       className={`relative p-3 rounded-2xl bg-white border border-slate-100 shadow-sm flex flex-col items-center justify-center gap-2 transition active:scale-95 hover:shadow-md hover:border-indigo-100 h-[85px] w-full ${isLocked ? 'opacity-60 grayscale' : ''}`}
     >
-      {/* BADGE MERAH (NEW) */}
       {badgeCount > 0 && (
           <div className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full border-2 border-white shadow-sm z-10 animate-bounce">
               {badgeCount}
@@ -318,7 +333,6 @@ export default function Dashboard() {
 
             {!isPersonalUser && activeMode === 'PERSONAL' && (
                <div onClick={toggleMode} className="inline-flex items-center gap-1 bg-white/20 px-3 py-1 rounded-full text-[10px] font-bold border border-white/30 cursor-pointer hover:bg-white/30 transition">
-                  {/* UPDATE: Icon Dinamis */}
                   {profile?.account_type === 'organization' ? <Users size={12}/> : <Briefcase size={12}/>}
                   <span>{profile?.account_type === 'organization' ? 'Kembali ke Organisasi' : 'Kembali ke Bisnis'}</span>
                </div>
@@ -355,51 +369,50 @@ export default function Dashboard() {
       <div className="px-6 mt-6">
          {activeMode === 'BUSINESS' && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-                <div className="flex justify-between items-center mb-3">
-                    <h3 className="text-slate-900 font-bold text-base">Menu Bisnis</h3>
-                    <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-bold">Juragan</span>
-                </div>
-                <div className="grid grid-cols-4 gap-3">
-                    <MenuCard icon={BookOpenCheck} label="Jurnal" onClick={() => navigate('/journal-process')} colorClass="bg-indigo-50 text-indigo-600"/>
-                    <MenuCard icon={ClipboardList} label="Laporan" onClick={() => navigate('/reports-menu')} colorClass="bg-rose-50 text-rose-600"/>
-                    <MenuCard icon={Package} label="Stok" onClick={() => navigate('/stock')} colorClass="bg-orange-50 text-orange-600"/>
-                    <MenuCard icon={LayoutGrid} label="Lainnya" onClick={() => setShowMoreMenu(true)} colorClass="bg-slate-50 text-slate-600"/>
-                </div>
+               <div className="flex justify-between items-center mb-3">
+                   <h3 className="text-slate-900 font-bold text-base">Menu Bisnis</h3>
+                   <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-bold">Juragan</span>
+               </div>
+               <div className="grid grid-cols-4 gap-3">
+                   <MenuCard icon={BookOpenCheck} label="Jurnal" onClick={() => navigate('/journal-process')} colorClass="bg-indigo-50 text-indigo-600"/>
+                   <MenuCard icon={ClipboardList} label="Laporan" onClick={() => navigate('/reports-menu')} colorClass="bg-rose-50 text-rose-600"/>
+                   <MenuCard icon={Package} label="Stok" onClick={() => navigate('/stock')} colorClass="bg-orange-50 text-orange-600"/>
+                   <MenuCard icon={LayoutGrid} label="Lainnya" onClick={() => setShowMoreMenu(true)} colorClass="bg-slate-50 text-slate-600"/>
+               </div>
             </motion.div>
          )}
 
          {activeMode === 'ORGANIZATION' && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-                <div className="flex justify-between items-center mb-3">
-                    <h3 className="text-slate-900 font-bold text-base">Menu Organisasi</h3>
-                    <span className="text-[10px] bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-bold">Admin</span>
-                </div>
-                <div className="grid grid-cols-4 gap-3">
-                    <MenuCard icon={BookOpenCheck} label="Jurnal" onClick={() => navigate('/journal-process')} colorClass="bg-indigo-50 text-indigo-600"/>
-                    <MenuCard icon={ClipboardList} label="Laporan" onClick={() => navigate('/reports-menu')} colorClass="bg-rose-50 text-rose-600"/>
-                    <MenuCard icon={Users} label="Anggota" onClick={() => navigate('/members')} colorClass="bg-cyan-50 text-cyan-600"/>
-                    <MenuCard icon={LayoutGrid} label="Lainnya" onClick={() => setShowMoreMenu(true)} colorClass="bg-slate-50 text-slate-600"/>
-                </div>
+               <div className="flex justify-between items-center mb-3">
+                   <h3 className="text-slate-900 font-bold text-base">Menu Organisasi</h3>
+                   <span className="text-[10px] bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-bold">Admin</span>
+               </div>
+               <div className="grid grid-cols-4 gap-3">
+                   <MenuCard icon={BookOpenCheck} label="Jurnal" onClick={() => navigate('/journal-process')} colorClass="bg-indigo-50 text-indigo-600"/>
+                   <MenuCard icon={ClipboardList} label="Laporan" onClick={() => navigate('/reports-menu')} colorClass="bg-rose-50 text-rose-600"/>
+                   <MenuCard icon={Users} label="Anggota" onClick={() => navigate('/members')} colorClass="bg-cyan-50 text-cyan-600"/>
+                   <MenuCard icon={LayoutGrid} label="Lainnya" onClick={() => setShowMoreMenu(true)} colorClass="bg-slate-50 text-slate-600"/>
+               </div>
             </motion.div>
          )}
 
          {activeMode === 'PERSONAL' && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-                <div className="flex justify-between items-center mb-3">
-                    <h3 className="text-slate-900 font-bold text-base">Menu Pribadi</h3>
-                </div>
-                <div className="grid grid-cols-4 gap-3">
-                    <MenuCard icon={PiggyBank} label="Budget" onClick={() => navigate('/budget')} colorClass="bg-pink-50 text-pink-600"/>
-                    <MenuCard icon={Target} label="Goals" onClick={() => navigate('/goals')} colorClass="bg-emerald-50 text-emerald-600"/>
-                    {/* UPDATE: Menu Tagihan dengan Badge */}
-                    <MenuCard icon={Landmark} label="Tagihan" onClick={() => navigate('/bills')} colorClass="bg-violet-50 text-violet-600" badgeCount={billAlert}/>
-                    <MenuCard icon={LayoutGrid} label="Lainnya" onClick={() => setShowMoreMenu(true)} colorClass="bg-slate-50 text-slate-600"/>
-                </div>
+               <div className="flex justify-between items-center mb-3">
+                   <h3 className="text-slate-900 font-bold text-base">Menu Pribadi</h3>
+               </div>
+               <div className="grid grid-cols-4 gap-3">
+                   <MenuCard icon={PiggyBank} label="Budget" onClick={() => navigate('/budget')} colorClass="bg-pink-50 text-pink-600"/>
+                   <MenuCard icon={Target} label="Goals" onClick={() => navigate('/goals')} colorClass="bg-emerald-50 text-emerald-600"/>
+                   <MenuCard icon={Landmark} label="Tagihan" onClick={() => navigate('/bills')} colorClass="bg-violet-50 text-violet-600" badgeCount={billAlert}/>
+                   <MenuCard icon={LayoutGrid} label="Lainnya" onClick={() => setShowMoreMenu(true)} colorClass="bg-slate-50 text-slate-600"/>
+               </div>
             </motion.div>
          )}
       </div>
 
-      {/* TRANSAKSI TERAKHIR */}
+      {/* TRANSAKSI TERAKHIR (DIPERBAIKI TANGGALNYA) */}
       <div className="px-6 mt-8 mb-4">
          <div className="flex justify-between items-center mb-4">
             <h3 className="text-slate-900 font-bold text-base">Riwayat Terbaru</h3>
@@ -413,7 +426,7 @@ export default function Dashboard() {
             ) : transactions.length === 0 ? (
                <div className="text-center py-8 bg-white rounded-2xl border border-slate-100 border-dashed">
                   <p className="text-4xl mb-2">🍃</p>
-                  <p className="text-slate-400 text-sm">Belum ada transaksi.</p>
+                  <p className="text-slate-400 text-sm">Belum ada transaksi di mode ini.</p>
                </div>
             ) : (
                transactions.map((t, idx) => (
@@ -424,7 +437,11 @@ export default function Dashboard() {
                         </div>
                         <div>
                            <p className="text-sm font-bold text-slate-800 truncate w-32">{t.merchant || 'Transaksi'}</p>
-                           <p className="text-xs text-slate-400 capitalize">{t.category}</p>
+                           <div className="flex items-center gap-2">
+                               <p className="text-xs text-slate-400 capitalize">{t.category}</p>
+                               <span className="text-[10px] text-slate-300">•</span>
+                               <p className="text-xs text-slate-400">{formatDateShort(t.date)}</p>
+                           </div>
                         </div>
                      </div>
                      <span className={`font-bold text-sm ${t.type === 'income' ? 'text-green-600' : 'text-slate-800'}`}>
@@ -463,7 +480,7 @@ export default function Dashboard() {
                         </h3>
                         <button onClick={() => setShowNotif(false)} className="text-white/80 hover:text-white p-1 rounded-full hover:bg-white/10 transition"><X size={20}/></button>
                     </div>
-                    <p className="text-indigo-100 text-xs mt-1">Analisa otomatis kesehatan keuanganmu</p>
+                    <p className="text-indigo-100 text-xs mt-1">Analisa otomatis {activeMode === 'PERSONAL' ? 'keuanganmu' : 'arus kas bisnis'}</p>
                 </div>
 
                 <div className="p-5 max-h-[60vh] overflow-y-auto bg-slate-50">
@@ -506,7 +523,7 @@ export default function Dashboard() {
         )}
       </AnimatePresence>
 
-      {/* MODAL UPSELL */}
+      {/* MODAL UPSELL (SAMA) */}
       <AnimatePresence>
         {showUpsell && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm" onClick={() => setShowUpsell(false)}>
@@ -547,6 +564,7 @@ export default function Dashboard() {
         )}
       </AnimatePresence>
 
+      {/* MENU LAINNYA (SAMA) */}
       <AnimatePresence>
         {showMoreMenu && (
           <>
@@ -584,10 +602,7 @@ export default function Dashboard() {
                           </div>
                           <MenuCard icon={PiggyBank} label="Budget" onClick={() => handleSwitchNav('/budget', 'PERSONAL')} colorClass="bg-pink-50 text-pink-600"/>
                           <MenuCard icon={Target} label="Goals" onClick={() => handleSwitchNav('/goals', 'PERSONAL')} colorClass="bg-emerald-50 text-emerald-600"/>
-                          
-                          {/* UPDATE: Tagihan di Menu Lainnya */}
                           <MenuCard icon={Landmark} label="Tagihan" onClick={() => handleSwitchNav('/bills', 'PERSONAL')} colorClass="bg-violet-50 text-violet-600" badgeCount={billAlert}/>
-                          
                           <MenuCard icon={TrendingUp} label="Investasi" onClick={() => handleSwitchNav('/invest', 'PERSONAL')} colorClass="bg-emerald-50 text-emerald-600"/>
                           <MenuCard icon={Calendar} label="Event" onClick={() => handleSwitchNav('/events', 'PERSONAL')} colorClass="bg-purple-50 text-purple-600"/>
                        </>
@@ -607,10 +622,7 @@ export default function Dashboard() {
                           </div>
                           <MenuCard icon={PiggyBank} label="Budget" onClick={() => handleSwitchNav('/budget', 'PERSONAL')} colorClass="bg-pink-50 text-pink-600"/>
                           <MenuCard icon={Target} label="Goals" onClick={() => handleSwitchNav('/goals', 'PERSONAL')} colorClass="bg-emerald-50 text-emerald-600"/>
-                          
-                          {/* UPDATE: Tagihan di Menu Lainnya */}
                           <MenuCard icon={Landmark} label="Tagihan" onClick={() => handleSwitchNav('/bills', 'PERSONAL')} colorClass="bg-violet-50 text-violet-600" badgeCount={billAlert}/>
-                          
                           <MenuCard icon={TrendingUp} label="Investasi" onClick={() => handleSwitchNav('/invest', 'PERSONAL')} colorClass="bg-emerald-50 text-emerald-600"/>
                           <MenuCard icon={Calendar} label="Event" onClick={() => handleSwitchNav('/events', 'PERSONAL')} colorClass="bg-purple-50 text-purple-600"/>
                        </>
