@@ -1,14 +1,12 @@
-import Groq from "groq-sdk";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
-// API Key Groq dari .env
-const API_KEY = import.meta.env.VITE_GROQ_API_KEY; 
-// Inisialisasi Groq Client
-const groq = new Groq({ apiKey: API_KEY, dangerouslyAllowBrowser: true });
+const API_KEY = import.meta.env.VITE_GEMINI_API_KEY; 
+const genAI = new GoogleGenerativeAI(API_KEY);
 
-// MODEL SATU UNTUK SEMUA (Llama 4 Scout - Multimodal)
-const MODEL_NAME = "meta-llama/llama-4-scout-17b-16e-instruct";
+// ABANG REQUEST TETAP PAKAI INI
+const MODEL_NAME = "gemini-2.5-flash"; 
 
-// Helper untuk menyusun list kategori di Prompt (SAMA SEPERTI SEBELUMNYA)
+// Helper untuk menyusun list kategori di Prompt
 const buildCategoryPrompt = (userCategories = []) => {
     // List Baku
     const defaultCats = ['Makanan', 'Transport', 'Belanja', 'Tagihan', 'Hiburan', 'Kesehatan', 'Lainnya'];
@@ -18,14 +16,14 @@ const buildCategoryPrompt = (userCategories = []) => {
     return allCats.join(", ");
 };
 
-// Helper Format Rupiah (SAMA SEPERTI SEBELUMNYA)
-const formatIDR = (num) => {
-    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(num);
-};
-
-// --- FUNGSI 1: VOICE & TEXT (MENGGUNAKAN GROQ) ---
+/// --- FUNGSI VOICE & TEXT (UPDATE: TERIMA KATEGORI USER) ---
 export const processVoiceInput = async (text, userCategories = []) => {
   try {
+    const model = genAI.getGenerativeModel({ 
+        model: MODEL_NAME,
+        generationConfig: { responseMimeType: "application/json" }
+    });
+    
     const today = new Date().toISOString().split('T')[0];
     const categoryListString = buildCategoryPrompt(userCategories);
 
@@ -41,9 +39,8 @@ export const processVoiceInput = async (text, userCategories = []) => {
     2. Detect Date (handle "kemarin", "lusa", etc.).
     3. Categorize items using ONLY the "ALLOWED CATEGORIES" list above. Pick the most relevant one.
     
-    IMPORTANT: Return ONLY a valid JSON Array. No markdown blocks.
     Output Schema: 
-    [{ 
+    Array of objects [{ 
         "merchant": string, 
         "total_amount": number, 
         "date": string (YYYY-MM-DD),
@@ -53,34 +50,30 @@ export const processVoiceInput = async (text, userCategories = []) => {
     }]
     `;
 
-    const chatCompletion = await groq.chat.completions.create({
-      messages: [{ role: "user", content: prompt }],
-      model: MODEL_NAME,
-      temperature: 0.1, // Rendah biar konsisten output JSON
-      response_format: { type: "json_object" } // Fitur Groq agar output pasti JSON
-    });
-
-    const resultText = chatCompletion.choices[0]?.message?.content || "[]";
-    const cleanJson = resultText.replace(/```json|```/g, '').trim();
-    
-    const parsed = JSON.parse(cleanJson);
-    // Handle jika Groq membungkus array dalam object (misal { "transactions": [...] })
-    if (Array.isArray(parsed)) return parsed;
-    return parsed.transactions || parsed.data || [parsed];
+    const result = await model.generateContent(prompt);
+    return JSON.parse(result.response.text());
 
   } catch (error) {
-    console.error("Groq Text Error:", error);
-    throw new Error("Gagal proses input suara/teks.");
+    console.error("Voice/Text Error:", error);
+    throw new Error("Gagal proses input.");
   }
 };
 
-// --- FUNGSI 2: SCAN GAMBAR (MENGGUNAKAN GROQ VISION) ---
+// --- FUNGSI VISION (UPDATE: TERIMA KATEGORI USER) ---
 export const processImageInput = async (fileBase64, mimeType, userCategories = []) => {
   try {
+    const model = genAI.getGenerativeModel({ 
+        model: MODEL_NAME,
+        generationConfig: { 
+            responseMimeType: "application/json",
+            temperature: 0.2 
+        }
+    });
+
     const categoryListString = buildCategoryPrompt(userCategories);
 
     const prompt = `
-    Analyze this receipt image. Extract data strictly into this JSON structure:
+    Analyze receipt image. Extract data strictly into this JSON structure:
     {
       "merchant": "Store Name",
       "date": "YYYY-MM-DD", 
@@ -95,40 +88,22 @@ export const processImageInput = async (fileBase64, mimeType, userCategories = [
     ALLOWED CATEGORIES: [${categoryListString}]
 
     RULES:
-    1. Look for the date. Convert to YYYY-MM-DD. If missing, use today's date.
+    1. Look for the date. Convert to YYYY-MM-DD. If missing, return null.
     2. For "category", choose the BEST MATCH from the "ALLOWED CATEGORIES" list provided above.
-    3. Return ONLY valid JSON.
+    3. Do NOT create new categories outside that list.
     `;
     
-    // Format URL Data URI untuk Groq
-    const imageUrl = `data:${mimeType};base64,${fileBase64}`;
-
-    const chatCompletion = await groq.chat.completions.create({
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: prompt },
-            { type: "image_url", image_url: { url: imageUrl } }, // Input Gambar
-          ],
-        },
-      ],
-      model: MODEL_NAME, // Pakai model yang sama (Multimodal)
-      temperature: 0.1,
-      response_format: { type: "json_object" }
-    });
-
-    const resultText = chatCompletion.choices[0]?.message?.content || "{}";
-    const cleanJson = resultText.replace(/```json|```/g, '').trim();
-    return JSON.parse(cleanJson);
+    const imagePart = { inlineData: { data: fileBase64, mimeType: mimeType } };
+    const result = await model.generateContent([prompt, imagePart]);
+    return JSON.parse(result.response.text());
 
   } catch (error) {
-    console.error("Groq Vision Error:", error);
+    console.error("Vision Error:", error);
     throw new Error("Gagal analisa gambar.");
   }
 };
 
-// --- FUNGSI 3: GENERATE INSIGHT (MENGGUNAKAN GROQ) ---
+// --- FUNGSI GENERATE INSIGHT (MAJOR UPGRADE: REAL AI) ---
 export const generateFinancialInsights = async (transactions) => {
     // 1. Cek Data Kosong
     if (!transactions || transactions.length === 0) {
@@ -136,16 +111,26 @@ export const generateFinancialInsights = async (transactions) => {
     }
 
     try {
-        // 2. Siapkan Ringkasan Data
+        // 2. Siapkan Ringkasan Data untuk dikirim ke AI
+        // Kita tidak kirim semua raw object biar hemat token, kita format jadi string ringkas.
         const summaryData = transactions.map(t => 
             `- ${t.date.split('T')[0]}: ${t.type === 'income' ? '+' : '-'} ${formatIDR(t.total_amount)} (${t.category} @ ${t.merchant})`
         ).join("\n");
 
+        // Hitung total manual sekilas buat konteks prompt
         let income = 0, expense = 0;
         transactions.forEach(t => t.type === 'income' ? income += Number(t.total_amount) : expense += Number(t.total_amount));
         const balance = income - expense;
 
+        const model = genAI.getGenerativeModel({ 
+            model: MODEL_NAME,
+            generationConfig: { 
+                responseMimeType: "application/json" 
+            }
+        });
+
         // 3. Prompt Engineer yang Cerdas
+        // Kita minta AI jadi "Konsultan Keuangan Pribadi yang Santai tapi Tajam"
         const prompt = `
         Role: Kamu adalah asisten keuangan pribadi bernama "Rapikus AI".
         Tone: Santai, suportif, bahasa Indonesia gaul tapi sopan, kadang pakai emoji.
@@ -164,39 +149,31 @@ export const generateFinancialInsights = async (transactions) => {
         Aturan Insight:
         1. Buat 2 sampai 3 kalimat insight pendek.
         2. Jangan kaku. Jangan cuma bilang "Saldo kamu sekian".
-        3. Jika boros di kategori tertentu, tegor halus & kasih saran.
-        4. Jika saldo minus, kasih warning.
-        5. Sebutkan nama merchant jika mencolok.
+        3. Jika boros di kategori tertentu (misal sering jajan/kopi), tegor secara halus dan berikan saran.
+        4. Jika saldo minus, kasih warning keras tapi solutif.
+        5. Jika hemat/sehat, kasih pujian serta masukan untuk lebih di tingkatkan.
+        6. Sebutkan nama merchant jika itu mencolok (misal: "Sering banget ke Starbucks nih").
 
         Contoh Output JSON:
         ["Waduh, jajan kopi kamu minggu ini udah setara cicilan motor lho ☕", "Saldo aman, tapi hati-hati pengeluaran transport mulai bengkak 🚗"]
         `;
 
-        const chatCompletion = await groq.chat.completions.create({
-            messages: [{ role: "user", content: prompt }],
-            model: MODEL_NAME,
-            temperature: 0.7, // Lebih kreatif untuk insight
-            response_format: { type: "json_object" }
-        });
-
-        const resultText = chatCompletion.choices[0]?.message?.content;
-        const cleanJson = resultText.replace(/```json|```/g, '').trim();
+        const result = await model.generateContent(prompt);
+        const responseText = result.response.text();
         
-        const parsed = JSON.parse(cleanJson);
+        // Bersihkan formatting markdown json jika ada (kadang Gemini nambahin ```json)
+        const cleanJson = responseText.replace(/```json|```/g, '').trim();
         
-        // Handle jika Groq membungkus array dalam object (misal { "insights": [...] })
-        if (Array.isArray(parsed)) return parsed;
-        // Cari value yang berupa array di dalam object hasil parse
-        return Object.values(parsed).find(v => Array.isArray(v)) || ["Keuanganmu aman, terus pantau ya! 👍"];
+        return JSON.parse(cleanJson);
 
     } catch (error) {
-        console.error("Groq Insight Error:", error);
-        // Fallback kalau API Error
+        console.error("AI Insight Error:", error);
+        // Fallback kalau AI Error/Limit Habis (Balik ke logic manual sederhana sebagai cadangan)
         return getFallbackInsights(transactions);
     }
 };
 
-// --- FALLBACK MANUAL (SAMA SEPERTI SEBELUMNYA) ---
+// --- FALLBACK MANUAL (JAGA-JAGA KALAU API ERROR) ---
 const getFallbackInsights = (transactions) => {
     let income = 0, expense = 0;
     transactions.forEach(t => t.type === 'income' ? income += Number(t.total_amount) : expense += Number(t.total_amount));
@@ -205,4 +182,9 @@ const getFallbackInsights = (transactions) => {
     if (balance < 0) return ["Waduh, pengeluaran lebih besar dari pemasukan nih! 🚨 Cek lagi pos pengeluaranmu."];
     if (expense > income * 0.8) return ["Hati-hati, sisa saldomu menipis. Rem dulu jajannya ya! 🛡️"];
     return ["Keuanganmu tercatat rapi. Terus pertahankan ya! 🌟"];
+};
+
+// Helper Format Rupiah
+const formatIDR = (num) => {
+    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(num);
 };
