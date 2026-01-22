@@ -5,102 +5,142 @@ const API_KEY = import.meta.env.VITE_GROQ_API_KEY;
 // Inisialisasi Groq Client
 const groq = new Groq({ apiKey: API_KEY, dangerouslyAllowBrowser: true });
 
-// MODEL SATU UNTUK SEMUA (Llama 4 Scout - Multimodal)
-const MODEL_NAME = "meta-llama/llama-4-scout-17b-16e-instruct";
+// Gunakan model Llama 3 70B yang sangat cerdas untuk instruksi kompleks
+const MODEL_NAME = "meta-llama/llama-4-scout-17b-16e-instruct"; 
 
-// Helper untuk menyusun list kategori di Prompt (SAMA SEPERTI SEBELUMNYA)
+// Helper untuk menyusun list kategori di Prompt
 const buildCategoryPrompt = (userCategories = []) => {
-    // List Baku
-    const defaultCats = ['Makanan', 'Transport', 'Belanja', 'Tagihan', 'Hiburan', 'Kesehatan', 'Lainnya'];
+    // List Baku (Expense + Income)
+    const defaultCats = [
+        // Pengeluaran
+        'Makanan', 'Transport', 'Belanja', 'Tagihan', 'Hiburan', 'Kesehatan', 'Lainnya',
+        // Pemasukan (NEW)
+        'Gaji', 'Bonus', 'Hadiah', 'Penjualan', 'Investasi','Saldo Awal'
+    ];
     
-    // Gabung dengan kategori user, hilangkan duplikat, dan join jadi string
     const allCats = [...new Set([...defaultCats, ...userCategories])];
     return allCats.join(", ");
 };
 
-// Helper Format Rupiah (SAMA SEPERTI SEBELUMNYA)
+// Helper Format Rupiah
 const formatIDR = (num) => {
     return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(num);
 };
 
-// --- FUNGSI 1: VOICE & TEXT (MENGGUNAKAN GROQ) ---
+// --- FUNGSI 1: VOICE & TEXT (UPDATED FOR MULTI-TRANSACTION & WALLETS) ---
 export const processVoiceInput = async (text, userCategories = []) => {
   try {
     const today = new Date().toISOString().split('T')[0];
     const categoryListString = buildCategoryPrompt(userCategories);
 
     const prompt = `
-    Role: Expense Tracker Parser.
+    Role: Cerdas Expense Tracker Parser (Bahasa Indonesia).
     Current Date: ${today} (YYYY-MM-DD).
-    Input: "${text}"
+    Input Text: "${text}"
     
-    ALLOWED CATEGORIES: [${categoryListString}]
+    ALLOWED CATEGORIES: [${categoryListString}, Mutasi Saldo]
     
-    Tasks:
-    1. Extract transactions.
-    2. Detect Date (handle "kemarin", "lusa", etc.).
-    3. Categorize items using ONLY the "ALLOWED CATEGORIES" list above. Pick the most relevant one.
+    Task: Analisa teks input dan ekstrak menjadi daftar transaksi dalam format JSON.
+
+    SPECIAL RULE FOR NEW ACCOUNTS/OPENING BALANCE:
+    - Jika user menyebut "saldo awal", "buka rekening", "punya rekening baru", "dompet baru", "Kas Baru", "Tabungan Baru":
+      - Type: 'income'
+      - Category: 'Saldo Awal'
+      - source_wallet: [Nama Bank/Dompet Baru] (Contoh: "BJB", "BCA", "Dompet Saku", "BNI", "BSI")
+      - merchant: "Saldo Awal"
+
+    Rules for Extraction:
+    1. **Split Transactions**: Input mungkin berisi beberapa transaksi sekaligus (dipisah kata "dan", "lalu", "kemudian", ","). Pecah menjadi item terpisah.
+    2. **Detect Type**:
+       - 'expense': Pembelian, bayar, beli, jajan, bayar gaji, ngasih.
+       - 'income': Terima, dapat, gajian, masuk, keuntungan, laba, di kasih.
+       - 'transfer': Kirim, pindah, transfer, topup, mutasi.
+    3. **Detect Wallets**:
+       - 'source_wallet': Sumber dana (contoh: "pakai Gopay", "dari BCA", bayar QRIS). Jika tidak disebut, isi null.
+       - 'destination_wallet': Tujuan dana (HANYA untuk 'transfer', contoh: "ke Mandiri"). Jika tidak ada, isi null.
+    4. **Category**: Pilih dari ALLOWED CATEGORIES. Jika type='transfer', kategori WAJIB 'Mutasi Saldo'.
+    5. **Date**: Konversi kata waktu (kemarin, lusa) ke format YYYY-MM-DD. Default hari ini.
     
-    IMPORTANT: Return ONLY a valid JSON Array. No markdown blocks.
-    Output Schema: 
-    [{ 
-        "merchant": string, 
-        "total_amount": number, 
+    Output Schema (JSON Array):
+    [
+      {
+        "merchant": string (Nama barang/toko/keterangan),
+        "total_amount": number (Hanya angka),
         "date": string (YYYY-MM-DD),
-        "category": string, 
-        "type": "expense"|"income", 
-        "items": [{"name": string, "price": number}] 
-    }]
+        "category": string,
+        "type": "expense" | "income" | "transfer",
+        "source_wallet": string | null,
+        "destination_wallet": string | null
+      }
+    ]
     `;
 
     const chatCompletion = await groq.chat.completions.create({
       messages: [{ role: "user", content: prompt }],
       model: MODEL_NAME,
-      temperature: 0.1, // Rendah biar konsisten output JSON
-      response_format: { type: "json_object" } // Fitur Groq agar output pasti JSON
+      temperature: 0, // Wajib 0 agar output konsisten & patuh
+      response_format: { type: "json_object" }
     });
 
     const resultText = chatCompletion.choices[0]?.message?.content || "[]";
+    // Bersihkan markdown block jika ada
     const cleanJson = resultText.replace(/```json|```/g, '').trim();
     
     const parsed = JSON.parse(cleanJson);
-    // Handle jika Groq membungkus array dalam object (misal { "transactions": [...] })
+    
+    // Normalisasi Output: Pastikan selalu me-return Array
+    // Kadang LLM membungkus dalam object { "transactions": [...] } atau { "data": [...] }
     if (Array.isArray(parsed)) return parsed;
-    return parsed.transactions || parsed.data || [parsed];
+    if (parsed.transactions && Array.isArray(parsed.transactions)) return parsed.transactions;
+    if (parsed.data && Array.isArray(parsed.data)) return parsed.data;
+    
+    // Fallback jika me-return single object
+    return [parsed];
 
   } catch (error) {
     console.error("Groq Text Error:", error);
-    throw new Error("Gagal proses input suara/teks.");
+    // Fallback Manual Basic jika AI Error (Safety Net)
+    return [{
+        merchant: text,
+        total_amount: 0,
+        type: 'expense',
+        category: 'Lainnya',
+        source_wallet: null,
+        destination_wallet: null,
+        date: new Date().toISOString().split('T')[0]
+    }];
   }
 };
 
-// --- FUNGSI 2: SCAN GAMBAR (MENGGUNAKAN GROQ VISION) ---
+// --- FUNGSI 2: SCAN GAMBAR (UPDATED PROMPT FOR WALLETS) ---
 export const processImageInput = async (fileBase64, mimeType, userCategories = []) => {
   try {
     const categoryListString = buildCategoryPrompt(userCategories);
 
     const prompt = `
-    Analyze this receipt image. Extract data strictly into this JSON structure:
+    Analyze this receipt or transfer proof image strictly.
+    Return a JSON Object with this schema:
     {
-      "merchant": "Store Name",
+      "merchant": "Store Name or Receiver Name",
       "date": "YYYY-MM-DD", 
       "amount": Total Amount (number),
       "category": "CategoryString", 
-      "type": "expense" or "income",
-      "items": [
-        { "name": "Item Name", "price": Item Price (number) }
-      ]
+      "type": "expense" or "transfer",
+      "source_wallet": "Bank/Wallet used to pay (e.g. BCA, Gopay)",
+      "destination_wallet": "Target bank/wallet for transfer (only if it's a transfer proof)",
+      "items": [{ "name": "item", "price": 0 }]
     }
     
-    ALLOWED CATEGORIES: [${categoryListString}]
+    ALLOWED CATEGORIES: [${categoryListString}, Mutasi Saldo]
 
-    RULES:
-    1. Look for the date. Convert to YYYY-MM-DD. If missing, use today's date.
-    2. For "category", choose the BEST MATCH from the "ALLOWED CATEGORIES" list provided above.
-    3. Return ONLY valid JSON.
+    Rules:
+    1. If it's a transfer proof: set type to "transfer", merchant to receiver name, and fill "destination_wallet".
+    2. If it's a shop receipt: set type to "expense", merchant to shop name, and fill "source_wallet".
+    3. If date is missing, use today's date.
+    4. Pick the closest category. For transfer, use "Mutasi Saldo" as initial guess.
+    5. Return ONLY valid JSON.
     `;
     
-    // Format URL Data URI untuk Groq
     const imageUrl = `data:${mimeType};base64,${fileBase64}`;
 
     const chatCompletion = await groq.chat.completions.create({
@@ -109,11 +149,11 @@ export const processImageInput = async (fileBase64, mimeType, userCategories = [
           role: "user",
           content: [
             { type: "text", text: prompt },
-            { type: "image_url", image_url: { url: imageUrl } }, // Input Gambar
+            { type: "image_url", image_url: { url: imageUrl } },
           ],
         },
       ],
-      model: MODEL_NAME, // Pakai model yang sama (Multimodal)
+      model: MODEL_NAME,
       temperature: 0.1,
       response_format: { type: "json_object" }
     });
@@ -128,15 +168,13 @@ export const processImageInput = async (fileBase64, mimeType, userCategories = [
   }
 };
 
-// --- FUNGSI 3: GENERATE INSIGHT (MENGGUNAKAN GROQ) ---
+// --- FUNGSI 3: GENERATE INSIGHT (TETAP SAMA - SUDAH OKE) ---
 export const generateFinancialInsights = async (transactions) => {
-    // 1. Cek Data Kosong
     if (!transactions || transactions.length === 0) {
         return ["Data transaksi masih kosong. Yuk mulai catat pengeluaranmu hari ini! 📝"];
     }
 
     try {
-        // 2. Siapkan Ringkasan Data
         const summaryData = transactions.map(t => 
             `- ${t.date.split('T')[0]}: ${t.type === 'income' ? '+' : '-'} ${formatIDR(t.total_amount)} (${t.category} @ ${t.merchant})`
         ).join("\n");
@@ -145,7 +183,6 @@ export const generateFinancialInsights = async (transactions) => {
         transactions.forEach(t => t.type === 'income' ? income += Number(t.total_amount) : expense += Number(t.total_amount));
         const balance = income - expense;
 
-        // 3. Prompt Engineer yang Cerdas
         const prompt = `
         Role: Kamu adalah asisten keuangan pribadi bernama "Rapikus AI".
         Tone: Santai, suportif, bahasa Indonesia gaul tapi sopan, kadang pakai emoji.
@@ -174,8 +211,8 @@ export const generateFinancialInsights = async (transactions) => {
 
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: MODEL_NAME,
-            temperature: 0.7, // Lebih kreatif untuk insight
+            model: "llama3-70b-8192", // Gunakan model text yang kuat
+            temperature: 0.7,
             response_format: { type: "json_object" }
         });
 
@@ -184,19 +221,15 @@ export const generateFinancialInsights = async (transactions) => {
         
         const parsed = JSON.parse(cleanJson);
         
-        // Handle jika Groq membungkus array dalam object (misal { "insights": [...] })
         if (Array.isArray(parsed)) return parsed;
-        // Cari value yang berupa array di dalam object hasil parse
         return Object.values(parsed).find(v => Array.isArray(v)) || ["Keuanganmu aman, terus pantau ya! 👍"];
 
     } catch (error) {
         console.error("Groq Insight Error:", error);
-        // Fallback kalau API Error
         return getFallbackInsights(transactions);
     }
 };
 
-// --- FALLBACK MANUAL (SAMA SEPERTI SEBELUMNYA) ---
 const getFallbackInsights = (transactions) => {
     let income = 0, expense = 0;
     transactions.forEach(t => t.type === 'income' ? income += Number(t.total_amount) : expense += Number(t.total_amount));

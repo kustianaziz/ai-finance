@@ -32,6 +32,8 @@ import BillsPage from './pages/BillsPage';
 // Import Halaman Penampung (Biar link kosong gak error)
 import NotFoundPage from "./components/NotFoundPage"; 
 import EventsPage from './pages/EventsPage';
+import PrivateRoute from './components/PrivateRoute';
+import WalletPage from './pages/WalletPage';
 
 // --- KOMPONEN SATPAM (ROUTE GUARD) ---
 
@@ -92,7 +94,7 @@ function App() {
     <AuthProvider>
       <BrowserRouter>
           <Routes>
-            
+            <Route path="/wallets" element={<PrivateRoute><WalletPage /></PrivateRoute>} />
             {/* === GROUP 1: PUBLIC ONLY (Belum Login) === */}
             {/* Pakai PublicRoute biar user login gak bisa akses ini lagi */}
             <Route element={<PublicRoute />}>
