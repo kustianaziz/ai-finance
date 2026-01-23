@@ -109,16 +109,6 @@ export default function UpgradePage() {
         features: ['Unlimited Scan Struk', 'Unlimited Voice Input', 'Export Laporan PDF', 'Tanpa Iklan']
     },
     {
-        id: 'organization',
-        title: 'Komunitas / Org',
-        icon: Users,
-        price: '29.000',
-        color: 'from-teal-500 to-emerald-500',
-        text: 'text-teal-500',
-        desc: 'Transparansi dana untuk Masjid, BEM, RT/RW, & Komunitas.',
-        features: ['Semua Fitur Personal Pro', 'Kelola Iuran Anggota', 'Laporan Arus Kas Publik', 'Manajemen Proposal', 'Multi-Admin (Segera)']
-    },
-    {
         id: 'business',
         title: 'Juragan Bisnis',
         icon: Building2,
@@ -127,6 +117,17 @@ export default function UpgradePage() {
         text: 'text-blue-600',
         desc: 'Full power untuk UMKM. Kelola stok, karyawan, dan profit.',
         features: ['Semua Fitur Personal Pro', 'Cetak Invoice & Struk', 'Manajemen Stok Gudang', 'Hitung Gaji Karyawan', 'Laporan Laba Rugi']
+    },
+    {
+        id: 'organization',
+        title: 'Komunitas / Org',
+        icon: Users,
+        price: '??.???',
+        color: 'from-slate-400 to-slate-500', // Warna Disabled
+        text: 'text-slate-500',
+        desc: 'rencana fitur Transparansi dana untuk organisasi, BEM, RT/RW, & Komunitas.',
+        features: ['Semua Fitur Personal Pro', 'Kelola Iuran Anggota', 'Laporan Arus Kas Publik', 'Manajemen Proposal', 'Multi-Admin (Segera)'],
+        comingSoon: true // <--- STATUS BARU
     }
   ];
 
@@ -160,8 +161,9 @@ export default function UpgradePage() {
         {/* --- CARDS CONTAINER --- */}
         <div className="flex flex-col gap-6 max-w-md mx-auto">
             {plans.map((plan) => {
-                const isActive = currentPlan === plan.id; // Cek status aktif
+                const isActive = currentPlan === plan.id; 
                 const Icon = plan.icon;
+                const isComingSoon = plan.comingSoon; // Cek status coming soon
 
                 return (
                     <motion.div 
@@ -169,7 +171,7 @@ export default function UpgradePage() {
                         initial={{ opacity: 0, y: 20 }}
                         whileInView={{ opacity: 1, y: 0 }}
                         viewport={{ once: true }}
-                        className={`relative rounded-3xl p-1 ${isActive ? 'bg-gradient-to-r from-yellow-400 to-orange-500' : 'bg-slate-800/50 border border-slate-700'}`}
+                        className={`relative rounded-3xl p-1 ${isActive ? 'bg-gradient-to-r from-yellow-400 to-orange-500' : 'bg-slate-800/50 border border-slate-700'} ${isComingSoon ? 'opacity-80' : ''}`}
                     >
                         {/* Label Active */}
                         {isActive && (
@@ -178,7 +180,17 @@ export default function UpgradePage() {
                             </div>
                         )}
 
-                        <div className="bg-[#1E293B] rounded-[1.3rem] p-6 h-full flex flex-col relative">
+                        {/* Label Coming Soon */}
+                        {isComingSoon && (
+                            <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-slate-600 text-white text-[10px] font-extrabold px-3 py-1 rounded-full shadow-lg z-20 uppercase tracking-widest border border-slate-500">
+                                Segera Hadir
+                            </div>
+                        )}
+
+                        <div className="bg-[#1E293B] rounded-[1.3rem] p-6 h-full flex flex-col relative overflow-hidden">
+                            {/* Overlay Coming Soon (Optional: Gelapin dikit) */}
+                            {isComingSoon && <div className="absolute inset-0 bg-slate-900/10 pointer-events-none"></div>}
+
                             {/* Card Header */}
                             <div className="flex justify-between items-start mb-4">
                                 <div className={`w-12 h-12 rounded-2xl bg-gradient-to-br ${plan.color} flex items-center justify-center shadow-lg`}>
@@ -212,15 +224,17 @@ export default function UpgradePage() {
                             {/* Button */}
                             <button 
                                 onClick={() => handleSelectPlan(plan)}
-                                disabled={isActive}
+                                disabled={isActive || isComingSoon}
                                 className={`w-full py-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 ${
                                     isActive 
                                     ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
-                                    : `bg-gradient-to-r ${plan.color} text-white shadow-lg hover:brightness-110`
+                                    : isComingSoon
+                                        ? 'bg-slate-700 text-slate-400 cursor-not-allowed opacity-50'
+                                        : `bg-gradient-to-r ${plan.color} text-white shadow-lg hover:brightness-110`
                                 }`}
                             >
-                                {isActive ? 'Sedang Aktif' : 'Pilih Paket Ini'}
-                                {!isActive && <ArrowRight size={18}/>}
+                                {isActive ? 'Sedang Aktif' : isComingSoon ? 'Segera Hadir' : 'Pilih Paket Ini'}
+                                {!isActive && !isComingSoon && <ArrowRight size={18}/>}
                             </button>
                         </div>
                     </motion.div>

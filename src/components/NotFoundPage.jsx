@@ -11,9 +11,9 @@ export default function NotFoundPage() {
         <div className="w-20 h-20 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center mx-auto mb-6">
           <Construction size={40} />
         </div>
-        <h2 className="text-2xl font-extrabold text-slate-900 mb-2">Fitur Belum Tersedia</h2>
+        <h2 className="text-2xl font-extrabold text-slate-900 mb-2">Sedang di buat sesuatu yang spesial</h2>
         <p className="text-slate-500 mb-8">
-          Sabar ya Juragan! Fitur ini sedang dikerjakan oleh developer ganteng kami. 👨‍💻
+          Sabar ya gan! Fitur ini sedang dikerjakan oleh developer kami. 👨‍💻
         </p>
         <button 
           onClick={() => navigate(-1)} // Balik ke halaman sebelumnya

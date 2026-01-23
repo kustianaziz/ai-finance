@@ -9,7 +9,7 @@ import {
   Briefcase, Sparkles, ChevronRight, Crown, RefreshCcw,
   BookOpenCheck, ClipboardList, LayoutGrid, 
   Package, Receipt, Calculator, Users, ScrollText, HandCoins, 
-  PiggyBank, Target, Landmark, Calendar, TrendingUp, CheckCircle2, Rocket, Lightbulb
+  PiggyBank, Target, Landmark, Calendar, TrendingUp, CheckCircle2, Rocket, Lightbulb,Wallet
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -538,7 +538,7 @@ export default function Dashboard() {
                         </div>
                         <h2 className="text-2xl font-extrabold text-slate-900 mb-2">Buka Akses Sultan! 👑</h2>
                         <p className="text-slate-500 text-sm mb-6 leading-relaxed">
-                            Kelola Bisnis & Organisasi tanpa batas. Fitur profesional untuk level-up usahamu.
+                            Kelola Bisnis tanpa batas. Fitur profesional untuk level-up usahamu.
                         </p>
                         <div className="w-full bg-slate-50 rounded-xl p-4 mb-6 space-y-3 border border-slate-100 text-left">
                             <div className="flex items-center gap-3 text-sm text-slate-700">
@@ -583,114 +583,138 @@ export default function Dashboard() {
                  </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-6 pb-20">
-                 <div className="grid grid-cols-3 gap-4">
-                    
-                    {activeMode === 'BUSINESS' && (
-                       <>
-                          <MenuCard icon={Receipt} label="Invoice" onClick={() => navigate('/invoice')} colorClass="bg-red-50 text-red-600"/>
-                          <MenuCard icon={Calculator} label="Hutang" onClick={() => navigate('/debt')} colorClass="bg-cyan-50 text-cyan-600"/>
-                          <MenuCard icon={Users} label="Karyawan" onClick={() => navigate('/employees')} colorClass="bg-emerald-50 text-emerald-600"/>
-                          <MenuCard icon={Landmark} label="Pajak" onClick={() => navigate('/tax')} colorClass="bg-violet-50 text-violet-600"/>
-                          <MenuCard icon={Package} label="Gudang" onClick={() => navigate('/warehouse')} colorClass="bg-amber-50 text-amber-600"/>
-                          <MenuCard icon={Target} label="Target" onClick={() => navigate('/targets')} colorClass="bg-lime-50 text-lime-600"/>
+              <div className="flex-1 overflow-y-auto p-6 grid grid-cols-3 gap-4 pb-24">
+                  
+                  {/* --- MENU GLOBAL (MUNCUL DI SEMUA MODE) --- */}
+                  <MenuCard icon={Wallet} label="Dompet" onClick={() => navigate('/wallets')} colorClass="bg-indigo-50 text-indigo-600"/>
 
-                          <div className="col-span-3 mt-6 mb-2 flex items-center gap-3">
+                  {/* --- MODE BISNIS --- */}
+                  {activeMode === 'BUSINESS' && (
+                      <>
+                        <MenuCard icon={Receipt} label="Invoice" onClick={() => navigate('/invoice')} colorClass="bg-red-50 text-red-600"/>
+                        <MenuCard icon={Calculator} label="Hutang" onClick={() => navigate('/debt')} colorClass="bg-cyan-50 text-cyan-600"/>
+                        <MenuCard icon={Users} label="Karyawan" onClick={() => navigate('/employees')} colorClass="bg-emerald-50 text-emerald-600"/>
+                        <MenuCard icon={Landmark} label="Pajak" onClick={() => navigate('/tax')} colorClass="bg-violet-50 text-violet-600"/>
+                        <MenuCard icon={Package} label="Gudang" onClick={() => navigate('/warehouse')} colorClass="bg-amber-50 text-amber-600"/>
+                        <MenuCard icon={Target} label="Target" onClick={() => navigate('/targets')} colorClass="bg-lime-50 text-lime-600"/>
+
+                        {/* PEMISAH MENU PRIBADI */}
+                        <div className="col-span-3 mt-6 mb-2 flex items-center gap-3">
                              <div className="h-px bg-slate-200 flex-1"></div>
                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Menu Mode Pribadi</p>
                              <div className="h-px bg-slate-200 flex-1"></div>
-                          </div>
-                          <MenuCard icon={PiggyBank} label="Budget" onClick={() => handleSwitchNav('/budget', 'PERSONAL')} colorClass="bg-pink-50 text-pink-600"/>
-                          <MenuCard icon={Target} label="Goals" onClick={() => handleSwitchNav('/goals', 'PERSONAL')} colorClass="bg-emerald-50 text-emerald-600"/>
-                          <MenuCard icon={Landmark} label="Tagihan" onClick={() => handleSwitchNav('/bills', 'PERSONAL')} colorClass="bg-violet-50 text-violet-600" badgeCount={billAlert}/>
-                          <MenuCard icon={TrendingUp} label="Investasi" onClick={() => handleSwitchNav('/invest', 'PERSONAL')} colorClass="bg-emerald-50 text-emerald-600"/>
-                          <MenuCard icon={Calendar} label="Event" onClick={() => handleSwitchNav('/events', 'PERSONAL')} colorClass="bg-purple-50 text-purple-600"/>
-                       </>
-                    )}
+                        </div>
+                        
+                        <MenuCard icon={PiggyBank} label="Budget" onClick={() => handleSwitchNav('/budget', 'PERSONAL')} colorClass="bg-pink-50 text-pink-600"/>
+                        <MenuCard icon={Target} label="Goals" onClick={() => handleSwitchNav('/goals', 'PERSONAL')} colorClass="bg-emerald-50 text-emerald-600"/>
+                        <MenuCard icon={Landmark} label="Tagihan" onClick={() => handleSwitchNav('/bills', 'PERSONAL')} colorClass="bg-violet-50 text-violet-600" badgeCount={billAlert}/>
+                        {/* INVESTASI (COMING SOON) */}
+                        <MenuCard 
+                            icon={TrendingUp} 
+                            label="Investasi" 
+                            onClick={() => navigate('/invest')}  // <--- ARAHKAN KE PAGE, BUKAN ALERT
+                            colorClass="bg-emerald-50 text-emerald-600" // <--- WARNA AKTIF (STANDAR)
+                        />
+                        <MenuCard icon={Calendar} label="Event" onClick={() => handleSwitchNav('/events', 'PERSONAL')} colorClass="bg-purple-50 text-purple-600"/>
+                      </>
+                  )}
 
-                    {activeMode === 'ORGANIZATION' && (
-                       <>
-                          <MenuCard icon={HandCoins} label="Iuran" onClick={() => navigate('/dues')} colorClass="bg-pink-50 text-pink-600"/>
-                          <MenuCard icon={ScrollText} label="Proposal" onClick={() => navigate('/proposals')} colorClass="bg-yellow-50 text-yellow-600"/>
-                          <MenuCard icon={Target} label="Program" onClick={() => navigate('/programs')} colorClass="bg-lime-50 text-lime-600"/>
-                          <MenuCard icon={Package} label="Aset" onClick={() => navigate('/inventory')} colorClass="bg-orange-50 text-orange-600"/>
+                  {/* --- MODE ORGANISASI --- */}
+                  {activeMode === 'ORGANIZATION' && (
+                      <>
+                        <MenuCard icon={HandCoins} label="Iuran" onClick={() => navigate('/dues')} colorClass="bg-pink-50 text-pink-600"/>
+                        <MenuCard icon={ScrollText} label="Proposal" onClick={() => navigate('/proposals')} colorClass="bg-yellow-50 text-yellow-600"/>
+                        <MenuCard icon={Target} label="Program" onClick={() => navigate('/programs')} colorClass="bg-lime-50 text-lime-600"/>
+                        <MenuCard icon={Package} label="Aset" onClick={() => navigate('/inventory')} colorClass="bg-orange-50 text-orange-600"/>
 
-                          <div className="col-span-3 mt-6 mb-2 flex items-center gap-3">
+                        <div className="col-span-3 mt-6 mb-2 flex items-center gap-3">
                              <div className="h-px bg-slate-200 flex-1"></div>
                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Menu Mode Pribadi</p>
                              <div className="h-px bg-slate-200 flex-1"></div>
-                          </div>
-                          <MenuCard icon={PiggyBank} label="Budget" onClick={() => handleSwitchNav('/budget', 'PERSONAL')} colorClass="bg-pink-50 text-pink-600"/>
-                          <MenuCard icon={Target} label="Goals" onClick={() => handleSwitchNav('/goals', 'PERSONAL')} colorClass="bg-emerald-50 text-emerald-600"/>
-                          <MenuCard icon={Landmark} label="Tagihan" onClick={() => handleSwitchNav('/bills', 'PERSONAL')} colorClass="bg-violet-50 text-violet-600" badgeCount={billAlert}/>
-                          <MenuCard icon={TrendingUp} label="Investasi" onClick={() => handleSwitchNav('/invest', 'PERSONAL')} colorClass="bg-emerald-50 text-emerald-600"/>
-                          <MenuCard icon={Calendar} label="Event" onClick={() => handleSwitchNav('/events', 'PERSONAL')} colorClass="bg-purple-50 text-purple-600"/>
-                       </>
-                    )}
+                        </div>
+                        
+                        <MenuCard icon={PiggyBank} label="Budget" onClick={() => handleSwitchNav('/budget', 'PERSONAL')} colorClass="bg-pink-50 text-pink-600"/>
+                        <MenuCard icon={Target} label="Goals" onClick={() => handleSwitchNav('/goals', 'PERSONAL')} colorClass="bg-emerald-50 text-emerald-600"/>
+                        <MenuCard icon={Landmark} label="Tagihan" onClick={() => handleSwitchNav('/bills', 'PERSONAL')} colorClass="bg-violet-50 text-violet-600" badgeCount={billAlert}/>
+                        <MenuCard 
+                            icon={TrendingUp} 
+                            label="Investasi" 
+                            onClick={() => navigate('/invest')}  // <--- ARAHKAN KE PAGE, BUKAN ALERT
+                            colorClass="bg-emerald-50 text-emerald-600" // <--- WARNA AKTIF (STANDAR)
+                        />
+                        <MenuCard icon={Calendar} label="Event" onClick={() => handleSwitchNav('/events', 'PERSONAL')} colorClass="bg-purple-50 text-purple-600"/>
+                      </>
+                  )}
 
-                    {activeMode === 'PERSONAL' && (
-                       <>
-                          <MenuCard icon={Landmark} label="Tagihan" onClick={() => navigate('/bills')} colorClass="bg-violet-50 text-violet-600" badgeCount={billAlert}/>
-                          <MenuCard icon={TrendingUp} label="Investasi" onClick={() => navigate('/invest')} colorClass="bg-emerald-50 text-emerald-600"/>
-                          <MenuCard icon={Calendar} label="Event" onClick={() => navigate('/events')} colorClass="bg-purple-50 text-purple-600"/>
-                          
-                          {!isPersonalUser && (
-                              <>
-                                <div className="col-span-3 mt-6 mb-2 flex items-center gap-3">
-                                    <div className="h-px bg-slate-200 flex-1"></div>
-                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                                        Menu Mode {isOrgUser ? 'Organisasi' : 'Bisnis'}
-                                    </p>
-                                    <div className="h-px bg-slate-200 flex-1"></div>
-                                </div>
-                                {isBusinessUser ? (
-                                    <>
-                                        <MenuCard icon={Receipt} label="Invoice" onClick={() => handleSwitchNav('/invoice', 'BUSINESS')} colorClass="bg-red-50 text-red-600"/>
-                                        <MenuCard icon={Package} label="Stok" onClick={() => handleSwitchNav('/stock', 'BUSINESS')} colorClass="bg-orange-50 text-orange-600"/>
-                                        <MenuCard icon={BookOpenCheck} label="Jurnal" onClick={() => handleSwitchNav('/journal-process', 'BUSINESS')} colorClass="bg-indigo-50 text-indigo-600"/>
-                                        <MenuCard icon={Users} label="Karyawan" onClick={() => handleSwitchNav('/employees', 'BUSINESS')} colorClass="bg-emerald-50 text-emerald-600"/>
-                                        <MenuCard icon={ClipboardList} label="Laporan" onClick={() => handleSwitchNav('/reports-menu', 'BUSINESS')} colorClass="bg-rose-50 text-rose-600"/>
-                                    </>
-                                ) : (
-                                    <>
-                                        <MenuCard icon={HandCoins} label="Iuran" onClick={() => handleSwitchNav('/dues', 'ORGANIZATION')} colorClass="bg-pink-50 text-pink-600"/>
-                                        <MenuCard icon={Users} label="Anggota" onClick={() => handleSwitchNav('/members', 'ORGANIZATION')} colorClass="bg-cyan-50 text-cyan-600"/>
-                                        <MenuCard icon={BookOpenCheck} label="Jurnal" onClick={() => handleSwitchNav('/journal-process', 'ORGANIZATION')} colorClass="bg-indigo-50 text-indigo-600"/>
-                                        <MenuCard icon={ClipboardList} label="Laporan" onClick={() => handleSwitchNav('/reports-menu', 'ORGANIZATION')} colorClass="bg-rose-50 text-rose-600"/>
-                                    </>
-                                )}
-                              </>
-                          )}
+                  {/* --- MODE PRIBADI (ISI MODAL) --- */}
+                  {activeMode === 'PERSONAL' && (
+                      <>
+                        <MenuCard icon={Landmark} label="Tagihan" onClick={() => navigate('/bills')} colorClass="bg-violet-50 text-violet-600" badgeCount={billAlert}/>
+                        <MenuCard 
+                            icon={TrendingUp} 
+                            label="Investasi" 
+                            onClick={() => navigate('/invest')}  // <--- ARAHKAN KE PAGE, BUKAN ALERT
+                            colorClass="bg-emerald-50 text-emerald-600" // <--- WARNA AKTIF (STANDAR)
+                        />
+                        <MenuCard icon={Calendar} label="Event" onClick={() => navigate('/events')} colorClass="bg-purple-50 text-purple-600"/>
+                        
+                        {/* BAGIAN PRO FITUR (DISABLED / UPSELL) */}
+                        {!isPersonalUser && (
+                            <>
+                              <div className="col-span-3 mt-6 mb-2 flex items-center gap-3">
+                                  <div className="h-px bg-slate-200 flex-1"></div>
+                                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                                      Menu Mode {isOrgUser ? 'Organisasi' : 'Bisnis'}
+                                  </p>
+                                  <div className="h-px bg-slate-200 flex-1"></div>
+                              </div>
+                              {isBusinessUser ? (
+                                  <>
+                                      <MenuCard icon={Receipt} label="Invoice" onClick={() => handleSwitchNav('/invoice', 'BUSINESS')} colorClass="bg-red-50 text-red-600"/>
+                                      <MenuCard icon={Package} label="Stok" onClick={() => handleSwitchNav('/stock', 'BUSINESS')} colorClass="bg-orange-50 text-orange-600"/>
+                                      <MenuCard icon={BookOpenCheck} label="Jurnal" onClick={() => handleSwitchNav('/journal-process', 'BUSINESS')} colorClass="bg-indigo-50 text-indigo-600"/>
+                                      <MenuCard icon={Users} label="Karyawan" onClick={() => handleSwitchNav('/employees', 'BUSINESS')} colorClass="bg-emerald-50 text-emerald-600"/>
+                                      <MenuCard icon={ClipboardList} label="Laporan" onClick={() => handleSwitchNav('/reports-menu', 'BUSINESS')} colorClass="bg-rose-50 text-rose-600"/>
+                                  </>
+                              ) : (
+                                  <>
+                                      <MenuCard icon={HandCoins} label="Iuran" onClick={() => handleSwitchNav('/dues', 'ORGANIZATION')} colorClass="bg-pink-50 text-pink-600"/>
+                                      <MenuCard icon={Users} label="Anggota" onClick={() => handleSwitchNav('/members', 'ORGANIZATION')} colorClass="bg-cyan-50 text-cyan-600"/>
+                                      <MenuCard icon={BookOpenCheck} label="Jurnal" onClick={() => handleSwitchNav('/journal-process', 'ORGANIZATION')} colorClass="bg-indigo-50 text-indigo-600"/>
+                                      <MenuCard icon={ClipboardList} label="Laporan" onClick={() => handleSwitchNav('/reports-menu', 'ORGANIZATION')} colorClass="bg-rose-50 text-rose-600"/>
+                                  </>
+                              )}
+                            </>
+                        )}
 
-                          {isPersonalUser && (
-                              <>
-                                <div className="col-span-3 mt-6 mb-2 flex items-center gap-3">
-                                    <div className="h-px bg-slate-200 flex-1"></div>
-                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fitur Bisnis (Pro)</p>
-                                    <div className="h-px bg-slate-200 flex-1"></div>
-                                </div>
-                                <MenuCard icon={Package} label="Stok" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
-                                <MenuCard icon={Receipt} label="Invoice" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
-                                <MenuCard icon={BookOpenCheck} label="Jurnal" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
-                                <MenuCard icon={ClipboardList} label="Laporan" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
-                                <MenuCard icon={Users} label="Karyawan" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                        {isPersonalUser && (
+                            <>
+                              <div className="col-span-3 mt-6 mb-2 flex items-center gap-3">
+                                  <div className="h-px bg-slate-200 flex-1"></div>
+                                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fitur Bisnis (Pro)</p>
+                                  <div className="h-px bg-slate-200 flex-1"></div>
+                              </div>
+                              <MenuCard icon={Package} label="Stok" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                              <MenuCard icon={Receipt} label="Invoice" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                              <MenuCard icon={BookOpenCheck} label="Jurnal" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                              <MenuCard icon={ClipboardList} label="Laporan" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                              <MenuCard icon={Users} label="Karyawan" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
 
-                                <div className="col-span-3 mt-6 mb-2 flex items-center gap-3">
-                                    <div className="h-px bg-slate-200 flex-1"></div>
-                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fitur Organisasi (Pro)</p>
-                                    <div className="h-px bg-slate-200 flex-1"></div>
-                                </div>
-                                <MenuCard icon={HandCoins} label="Iuran" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
-                                <MenuCard icon={ScrollText} label="Proposal" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
-                                <MenuCard icon={Target} label="Program" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
-                                <MenuCard icon={Package} label="Aset" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
-                                <MenuCard icon={Users} label="Anggota" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
-                              </>
-                          )}
-                       </>
-                    )}
-                 </div>
-              </div>
+                              <div className="col-span-3 mt-6 mb-2 flex items-center gap-3">
+                                  <div className="h-px bg-slate-200 flex-1"></div>
+                                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fitur Organisasi (Pro)</p>
+                                  <div className="h-px bg-slate-200 flex-1"></div>
+                              </div>
+                              <MenuCard icon={HandCoins} label="Iuran" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                              <MenuCard icon={ScrollText} label="Proposal" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                              <MenuCard icon={Target} label="Program" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                              <MenuCard icon={Package} label="Aset" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                              <MenuCard icon={Users} label="Anggota" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                            </>
+                        )}
+                      </>
+                  )}
+               </div>
             </motion.div>
           </>
         )}
