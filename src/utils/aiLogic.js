@@ -281,7 +281,7 @@ export const generateFinancialInsights = async (transactions, userId) => {
         1. [Kesehatan Saldo]: Analisa apakah Cashflow user sehat (positif), standar, atau bahaya (negatif/minus). Puji jika saving rate bagus dan berikan saran positif untuk peningkatan.
         2. [Saran Budget]: Komentari budget yang kritis (hampir habis) atau yang tidak terpakai. Beri saran taktis munculkan nama budget yang hampir habis terpakai atau tidak terpakai samasekali, beri saran juga untuk mulai menyusun budget jika belum ada data bulan ini.
         3. [Reminder Tagihan]: WAJIB ingatkan tagihan yang jatuh tempo dekat/telat (sebutkan nama tagihannya).
-        4. [Motivasi Goals]: Hubungkan sisa saldo dengan goals user. Contoh: "Sisa saldomu bisa buat nambah tabungan [Nama Goal] lho!".
+        4. [Motivasi Goals]: Hubungkan sisa saldo kemudian lihat budget rencana pengeluaran lalu bandingkan dengan goals user. Contoh: "Sisa saldomu sebutkan [angka sisa saldo] dengan rencana pengelauran [sebutkan rencana pengeluaran bulan ini]  sebutkan saran nya apakah cukup untuk nabung di target [Nama Goal] lho!".
         5. [Reminder transaksi] : cek data transaksi reminder jika ada transaksi yang nominal nya jauh dari rata - rata pengeluaran biasa. informasikan rata - rata pengeluaran user tersebut berdasarkan data transaksi nya.
         6. [Reminder pemasukan] : ingatkan user saat ini pemasukan nya dari apa saja, dan rata - rata berapa. berikan saran positive yang memotivasi.
         7. [Saran Bisnis] : Berikan kesimpulan Akhir, dengan kondisi keuangan yang ada, kemudian melihat kondisi status tagihan, dan transaksi pengeluaran, berikan saran untuk meningkatkan pemasukan termasuk peluang bisnis yang bisa dilakukan.
