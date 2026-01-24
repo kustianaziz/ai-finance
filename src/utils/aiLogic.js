@@ -139,7 +139,7 @@ export const processImageInput = async (fileBase64, mimeType, userCategories = [
     ALLOWED CATEGORIES: [${categoryListString}, Mutasi Saldo]
 
     CRITICAL RULES FOR TRANSFER DETECTION:
-    1. Look for keywords: "Transfer Antar Bank", "Bank Yang Dituju", "Rekening Tujuan", "Berita Transfer", "M-Transfer".
+    1. Look for keywords: "Top Up", "Transfer Antar Bank", "Bank Yang Dituju", "Rekening Tujuan", "Berita Transfer", "M-Transfer".
     2. IF FOUND, SET type = "transfer" AND category = "Mutasi Saldo".
     3. SET merchant = Receiver Name (e.g., "SIFA USWATUN...").
     
@@ -149,7 +149,7 @@ export const processImageInput = async (fileBase64, mimeType, userCategories = [
        - Example: Header "bank bjb" -> source_wallet = "BJB".
 
     5. EXTRACT DESTINATION WALLET (PENTING):
-       - Look strictly for: "Bank Yang Dituju", "Bank Tujuan", "Ke Bank","Ke Rek" "Bank Penerima", "Ke Rekening", "Tujuan Transfer" "KEPADA".
+       - Look strictly for: "Bank Yang Dituju", "Bank Tujuan", "Ke Bank","Ke Rek" "Bank Penerima", "Ke Rekening", "Tujuan Transfer", "KEPADA", "Dana", "Go-Pay", "Sohpee Pay".
        - Example: "Bank Yang Dituju : BANK MANDIRI" -> destination_wallet = "Mandiri".
     
     6. EXTRACT DESTINATION WALLET TARIK TUNAI:

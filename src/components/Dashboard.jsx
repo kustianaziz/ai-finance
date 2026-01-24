@@ -120,18 +120,31 @@ export default function Dashboard() {
 
         // --- HITUNG ARUS KAS BULANAN (INCOME vs EXPENSE) ---
         let inc = 0, exp = 0;
+        let totalFlowForOpeningBalance = 0;
         if (summaryRes.data) {
             summaryRes.data.forEach(t => {
+                const amount = Number(t.total_amount);
+                
+                // 1. Hitung Net Flow untuk Saldo Awal (SEMUA TRANSAKSI DIHITUNG)
+                // Ini untuk membalikkan matematika saldo akhir -> saldo awal
+                if (t.type === 'income') totalFlowForOpeningBalance += amount;
+                else if (t.type === 'expense') totalFlowForOpeningBalance -= amount;
+
+                // 2. Hitung Laporan Income/Expense (FILTERED)
+                // Ini untuk tampilan grafik/teks "Pemasukan vs Pengeluaran" (Tanpa Mutasi)
                 if (t.category === 'Mutasi Saldo') return; 
-                if (t.type === 'income') inc += Number(t.total_amount);
-                else if (t.type === 'expense') exp += Number(t.total_amount);
+
+                if (t.type === 'income') inc += amount;
+                else if (t.type === 'expense') exp += amount;
             });
         }
 
+        const openingBalance = totalBalanceFromWallets - totalFlowForOpeningBalance;
+
         // Net Cash Flow bulan ini
-        const netFlow = inc - exp;
+        //const netFlow = inc - exp;
         // Saldo sebelum bulan ini dimulai
-        const openingBalance = totalBalanceFromWallets - netFlow;   
+        // const openingBalance = totalBalanceFromWallets - netFlow;   
         
         // UPDATE STATE
         // Balance: Dari Wallet (Akurat)
@@ -139,8 +152,8 @@ export default function Dashboard() {
         setSummary({ 
             income: inc, 
             expense: exp, 
-            balance: totalBalanceFromWallets, // Saldo Akhir
-            openingBalance: openingBalance    // Saldo Awal
+            balance: totalBalanceFromWallets, 
+            openingBalance: openingBalance 
         });
 
         if (recentRes.data) setTransactions(recentRes.data);

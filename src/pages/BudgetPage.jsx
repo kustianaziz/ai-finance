@@ -5,9 +5,30 @@ import { useAuth } from '../context/AuthProvider';
 import { 
   ArrowLeft, Plus, Copy, ChevronLeft, ChevronRight, 
   Trash2, AlertCircle, X, CheckCircle2, HelpCircle, RefreshCcw,
-  Wallet, TrendingUp, TrendingDown, Clock, Search
+  Wallet, TrendingUp, TrendingDown, Clock, Search, Edit2, ArrowDownLeft, ArrowUpRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+
+// --- HELPER INPUT FORMAT RP ---
+const NumberInput = ({ value, onChange, placeholder, className }) => {
+    const format = (val) => {
+        if (!val && val !== 0) return '';
+        return new Intl.NumberFormat('id-ID').format(val);
+    };
+    const handleChange = (e) => {
+        const raw = e.target.value.replace(/\D/g, ''); 
+        onChange(raw);
+    };
+    return (
+        <input 
+            type="text" 
+            value={format(value)} 
+            onChange={handleChange} 
+            placeholder={placeholder} 
+            className={className} 
+        />
+    );
+};
 
 export default function BudgetPage() {
   const navigate = useNavigate();
@@ -31,7 +52,8 @@ export default function BudgetPage() {
 
   // Modal & Notif
   const [showModal, setShowModal] = useState(false);
-  const [formData, setFormData] = useState({ category: '', amount: '', details: [] });
+  const [modalMode, setModalMode] = useState('add'); // 'add' | 'edit'
+  const [formData, setFormData] = useState({ id: null, category: '', amount: '', details: [] });
   const [notif, setNotif] = useState({ show: false, type: 'info', title: '', message: '', onConfirm: null });
   
   // --- FORMATTER ---
@@ -71,7 +93,7 @@ export default function BudgetPage() {
     }
   };
 
-  // --- LOGIC SYNC & SAVE (UDPATED: EXACT MATCH) ---
+  // --- LOGIC SYNC & SAVE ---
   const syncRealization = async () => {
     if (budgets.length === 0) return;
 
@@ -92,18 +114,14 @@ export default function BudgetPage() {
 
       if (transError) throw transError;
 
-      // 2. Logic Pencocokan (EXACT MATCHING - No Synonyms)
-      // Karena input AI sudah distandarisasi ke kategori baku/user
+      // 2. Logic Pencocokan
       const updates = {}; 
       budgets.forEach(b => updates[b.id] = 0); // Init 0
 
       if (transData) {
         transData.forEach(t => {
             const transCat = (t.category || '').toLowerCase().trim();
-
-            // Cari budget yang namanya SAMA PERSIS (case-insensitive)
             const match = budgets.find(b => b.category.toLowerCase().trim() === transCat);
-
             if (match) {
                 const amount = Number(t.total_amount) || 0;
                 updates[match.id] += amount;
@@ -121,8 +139,6 @@ export default function BudgetPage() {
       });
 
       await Promise.all(updatePromises);
-
-      // 4. Refresh State
       await fetchBudgetsAndSavedData();
       
     } catch (error) {
@@ -152,7 +168,6 @@ export default function BudgetPage() {
             .lte('date', endOfMonth)
             .order('date', { ascending: false });
 
-        // Filter EXACT MATCH juga untuk tampilan detail
         const targetCategory = budget.category.toLowerCase().trim();
         
         const filtered = (data || []).filter(t => {
@@ -169,6 +184,81 @@ export default function BudgetPage() {
       }
   };
 
+  // --- ACTIONS: ADD / EDIT / DELETE ---
+  const openAdd = () => {
+      setModalMode('add');
+      setFormData({ id: null, category: '', amount: '', details: [] });
+      setShowModal(true);
+  };
+
+  const openEdit = (budget) => {
+      setModalMode('edit');
+      setFormData({ 
+          id: budget.id, 
+          category: budget.category, 
+          amount: budget.amount_limit, 
+          details: budget.details || [] 
+      });
+      setShowModal(true);
+  };
+
+  const handleSaveBudget = async () => { 
+    try {
+        if (!formData.category || !formData.amount) { showAlert('error', 'Eits!', 'Data belum lengkap.'); return; }
+        const period = getPeriodDate(currentDate);
+        
+        // Format Title Case
+        const cleanCategory = formData.category.trim().charAt(0).toUpperCase() + formData.category.trim().slice(1).toLowerCase();
+        
+        const payload = { 
+            user_id: user.id, 
+            category: cleanCategory, 
+            amount_limit: Number(formData.amount), 
+            month_period: period, 
+            details: formData.details 
+        };
+
+        if (modalMode === 'add') {
+            // Cek duplikat manual untuk Insert
+            const exists = budgets.find(b => b.category.toLowerCase() === cleanCategory.toLowerCase());
+            if (exists) throw new Error("Kategori budget ini sudah ada di bulan ini.");
+
+            const { error } = await supabase.from('budgets').insert(payload);
+            if (error) throw error;
+        } else {
+            // Update
+            const { error } = await supabase.from('budgets').update(payload).eq('id', formData.id);
+            if (error) throw error;
+            
+            // Update tampilan detail real-time jika sedang dibuka
+            if (selectedBudget && selectedBudget.id === formData.id) {
+                setSelectedBudget({ ...selectedBudget, ...payload });
+            }
+        }
+
+        setShowModal(false); 
+        fetchBudgetsAndSavedData(); 
+        showAlert('success', 'Berhasil!', modalMode === 'add' ? 'Budget dibuat.' : 'Budget diperbarui.');
+    } catch (e) { showAlert('error', 'Gagal', e.message); }
+  };
+
+  const requestDelete = (budget) => {
+      setNotif({ 
+          show: true, 
+          type: 'confirm', 
+          title: 'Hapus Budget?', 
+          message: `Budget "${budget.category}" akan dihapus.`, 
+          onConfirm: () => executeDelete(budget.id) 
+      });
+  };
+
+  const executeDelete = async (id) => {
+      await supabase.from('budgets').delete().eq('id', id); 
+      closeNotif(); 
+      setSelectedBudget(null); // Tutup detail view
+      fetchBudgetsAndSavedData();
+  };
+
   // --- HELPER LAINNYA ---
   const showAlert = (type, title, message) => setNotif({ show: true, type, title, message, onConfirm: null });
   const closeNotif = () => setNotif({ ...notif, show: false });
@@ -176,20 +266,6 @@ export default function BudgetPage() {
     const newDate = new Date(currentDate);
     newDate.setMonth(newDate.getMonth() + direction);
     setCurrentDate(newDate);
-  };
-
-  const handleSaveBudget = async () => { 
-    try {
-        if (!formData.category || !formData.amount) { showAlert('error', 'Eits!', 'Data belum lengkap.'); return; }
-        const period = getPeriodDate(currentDate);
-        // Simpan kategori dengan format Title Case agar rapi dan konsisten
-        const cleanCategory = formData.category.trim().charAt(0).toUpperCase() + formData.category.trim().slice(1).toLowerCase();
-        
-        const payload = { user_id: user.id, category: cleanCategory, amount_limit: formData.amount, month_period: period, details: formData.details };
-        const { error } = await supabase.from('budgets').upsert(payload, { onConflict: 'user_id, category, month_period' });
-        if (error) throw error;
-        setShowModal(false); setFormData({ category: '', amount: '', details: [] }); fetchBudgetsAndSavedData(); showAlert('success', 'Berhasil!', 'Budget tersimpan.');
-    } catch (e) { showAlert('error', 'Gagal', e.message); }
   };
 
   const checkPrevMonthData = async () => { 
@@ -208,14 +284,6 @@ export default function BudgetPage() {
         const newBudgets = prevData.map(b => ({ user_id: user.id, category: b.category, amount_limit: b.amount_limit, details: b.details, month_period: period }));
         await supabase.from('budgets').insert(newBudgets); closeNotif(); fetchBudgetsAndSavedData();
     } catch (e) { showAlert('error', 'Gagal', e.message); }
-  };
-
-  const confirmDelete = (e, id) => {
-      e.stopPropagation(); 
-      setNotif({ show: true, type: 'confirm', title: 'Hapus?', message: 'Hapus budget ini?', onConfirm: () => executeDelete(id) });
-  };
-  const executeDelete = async (id) => {
-      await supabase.from('budgets').delete().eq('id', id); closeNotif(); fetchBudgetsAndSavedData();
   };
 
   return (
@@ -241,7 +309,7 @@ export default function BudgetPage() {
             >
                 <RefreshCcw size={20} className={loadingSync ? "animate-spin" : ""}/>
             </button>
-            <button onClick={() => setShowModal(true)} className="p-2 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 shadow-lg transition">
+            <button onClick={openAdd} className="p-2 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 shadow-lg transition">
                 <Plus size={20}/>
             </button>
         </div>
@@ -249,9 +317,9 @@ export default function BudgetPage() {
 
       {/* MONTH NAVIGATOR */}
       <div className="flex items-center justify-between px-6 py-4 bg-white border-b border-slate-100">
-         <button onClick={() => changeMonth(-1)} className="p-2 text-slate-400 hover:text-indigo-600"><ChevronLeft/></button>
-         <span className="font-bold text-slate-700 text-lg">{getMonthYear(currentDate)}</span>
-         <button onClick={() => changeMonth(1)} className="p-2 text-slate-400 hover:text-indigo-600"><ChevronRight/></button>
+          <button onClick={() => changeMonth(-1)} className="p-2 text-slate-400 hover:text-indigo-600"><ChevronLeft/></button>
+          <span className="font-bold text-slate-700 text-lg">{getMonthYear(currentDate)}</span>
+          <button onClick={() => changeMonth(1)} className="p-2 text-slate-400 hover:text-indigo-600"><ChevronRight/></button>
       </div>
 
       <div className="p-4 space-y-6">
@@ -322,7 +390,7 @@ export default function BudgetPage() {
                                 <p className="text-xs text-slate-400 truncate max-w-[200px]">{b.details.map(d => d.name).join(', ')}</p>
                             )}
                         </div>
-                        <button onClick={(e) => confirmDelete(e, b.id)} className="text-slate-300 hover:text-red-500 p-1"><Trash2 size={16}/></button>
+                        {/* Tombol Hapus Pindah ke Dalam Detail View, disini view only atau quick action */}
                     </div>
 
                     <div className="flex justify-between items-end mb-1 mt-4">
@@ -346,77 +414,144 @@ export default function BudgetPage() {
         })}
       </div>
 
-      {/* === MODAL DETAIL TRANSAKSI === */}
+      {/* === FULL PAGE DETAIL (SLIDE FROM RIGHT) === */}
       <AnimatePresence>
         {selectedBudget && (
-            <motion.div initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4" onClick={() => setSelectedBudget(null)}>
-                <motion.div initial={{y: "100%"}} animate={{y: 0}} exit={{y: "100%"}} className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
-                    <div className="flex justify-between items-center mb-4 shrink-0">
-                        <div><h3 className="font-bold text-lg text-slate-900">Riwayat {selectedBudget.category}</h3><p className="text-xs text-slate-500">Transaksi yang masuk ke budget ini</p></div>
-                        <button onClick={() => setSelectedBudget(null)} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition"><X size={20}/></button>
+            <motion.div 
+                initial={{ x: "100%" }} 
+                animate={{ x: 0 }} 
+                exit={{ x: "100%" }} 
+                transition={{ type: "spring", damping: 25, stiffness: 200 }} 
+                className="fixed inset-0 z-50 bg-slate-50 flex flex-col h-full w-full max-w-[420px] mx-auto"
+            >
+                {/* Header Detail */}
+                <div className="bg-white px-5 pt-5 pb-3 shadow-sm z-10 shrink-0 border-b border-slate-100">
+                    <div className="flex items-center gap-3 mb-4">
+                        <button onClick={() => setSelectedBudget(null)} className="p-2 -ml-2 rounded-full text-slate-600 hover:bg-slate-100 transition"><ArrowLeft size={24}/></button>
+                        <div className="flex-1">
+                            <h2 className="font-extrabold text-xl text-slate-900 leading-none">{selectedBudget.category}</h2>
+                            <p className="text-xs text-slate-400 mt-1 uppercase font-bold tracking-wider">{getMonthYear(currentDate)}</p>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={() => openEdit(selectedBudget)} className="p-2 bg-slate-50 border border-slate-200 text-slate-500 rounded-xl hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-100 transition"><Edit2 size={18}/></button>
+                            <button onClick={() => requestDelete(selectedBudget)} className="p-2 bg-slate-50 border border-slate-200 text-slate-500 rounded-xl hover:bg-red-50 hover:text-red-500 hover:border-red-100 transition"><Trash2 size={18}/></button>
+                        </div>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto space-y-3 pr-1 custom-scrollbar">
-                        {loadingDetail ? (
-                            <div className="text-center py-10 text-slate-400 animate-pulse"><p className="mb-2">⏳</p> Memuat data transaksi...</div>
-                        ) : relatedTransactions.length === 0 ? (
-                            <div className="text-center py-10 text-slate-400 flex flex-col items-center"><Search size={32} className="mb-2 opacity-50"/><p>Belum ada transaksi yang cocok.</p><p className="text-[10px] mt-1">Coba sinkronisasi data lagi.</p></div>
-                        ) : (
-                            relatedTransactions.map((t, idx) => {
-                                const fullDate = new Date(t.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
-                                const dayDate = new Date(t.date).getDate();
-                                return (
-                                    <div key={idx} className="flex justify-between items-center p-3 bg-slate-50 rounded-2xl border border-slate-100 hover:bg-white hover:shadow-sm transition">
-                                        <div className="flex items-center gap-3">
-                                            <div className="bg-white p-2 w-12 h-12 flex flex-col items-center justify-center rounded-xl border border-slate-200 text-slate-600 shadow-sm shrink-0">
-                                                <span className="text-sm font-extrabold leading-none">{dayDate}</span>
-                                                <span className="text-[9px] font-medium uppercase mt-0.5">{new Date(t.date).toLocaleDateString('id-ID', { month: 'short' })}</span>
-                                            </div>
-                                            <div className="flex flex-col gap-0.5">
-                                                <p className="text-sm font-bold text-slate-800 line-clamp-1">{t.merchant || 'Transaksi Tanpa Nama'}</p>
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-[10px] bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded font-medium capitalize">{t.category}</span>
-                                                    <span className="text-[10px] text-slate-400 flex items-center gap-1">• {fullDate}</span>
-                                                </div>
+                    <div className="flex justify-between items-end mb-2">
+                        <div>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Limit Anggaran</p>
+                            <h3 className="text-2xl font-black text-slate-800 tracking-tight">{formatIDR(selectedBudget.amount_limit)}</h3>
+                        </div>
+                        <div className="text-right">
+                             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Terpakai</p>
+                             <h3 className={`text-xl font-bold ${selectedBudget.current_usage > selectedBudget.amount_limit ? 'text-red-600' : 'text-green-600'}`}>{formatIDR(selectedBudget.current_usage)}</h3>
+                        </div>
+                    </div>
+                </div>
+
+                {/* List Transaksi */}
+                <div className="flex-1 overflow-y-auto p-4 bg-slate-50 space-y-3 pb-10 custom-scrollbar">
+                    <h4 className="font-bold text-sm text-slate-700 mb-2 flex items-center gap-2"><Clock size={16}/> Riwayat Transaksi</h4>
+                    
+                    {loadingDetail ? (
+                        <div className="text-center py-10 text-slate-400 animate-pulse"><p className="mb-2">⏳</p> Memuat data transaksi...</div>
+                    ) : relatedTransactions.length === 0 ? (
+                        <div className="text-center py-10 text-slate-400 flex flex-col items-center">
+                            <Search size={32} className="mb-2 opacity-50"/>
+                            <p className="text-sm font-medium">Belum ada transaksi.</p>
+                            <p className="text-[10px] mt-1 text-slate-400">Pastikan nama kategori transaksi sama persis dengan budget.</p>
+                        </div>
+                    ) : (
+                        relatedTransactions.map((t, idx) => {
+                            const fullDate = new Date(t.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+                            return (
+                                <motion.div 
+                                    key={idx} 
+                                    initial={{opacity:0, y:10}} animate={{opacity:1, y:0}}
+                                    className="flex justify-between items-center p-3 bg-white rounded-2xl border border-slate-100 shadow-sm"
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <div className="p-2.5 rounded-xl bg-red-50 text-red-600">
+                                            <ArrowUpRight size={18}/>
+                                        </div>
+                                        <div>
+                                            <p className="font-bold text-sm text-slate-800 line-clamp-1">{t.merchant || 'Tanpa Nama'}</p>
+                                            <div className="flex items-center gap-2 mt-0.5">
+                                                <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded font-bold capitalize">{t.category}</span>
+                                                <span className="text-[10px] text-slate-400">{fullDate}</span>
                                             </div>
                                         </div>
-                                        <span className="text-sm font-bold text-slate-700 whitespace-nowrap">{formatIDR(t.total_amount)}</span>
                                     </div>
-                                );
-                            })
-                        )}
-                    </div>
-                </motion.div>
+                                    <span className="text-sm font-bold text-slate-800">{formatIDR(t.total_amount)}</span>
+                                </motion.div>
+                            );
+                        })
+                    )}
+                </div>
             </motion.div>
         )}
       </AnimatePresence>
 
-      {/* MODAL INPUT & NOTIF */}
+      {/* MODAL INPUT ADD / EDIT */}
       <AnimatePresence>
         {showModal && (
-            <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
+            <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
                 <motion.div initial={{y: "100%"}} animate={{y: 0}} exit={{y: "100%"}} className="bg-white w-full max-w-md rounded-2xl p-6 shadow-2xl">
-                    <h3 className="font-bold text-lg mb-4">Buat Budget Baru</h3>
+                    <div className="flex justify-between items-center mb-6">
+                        <h3 className="font-bold text-lg text-slate-900">{modalMode === 'add' ? 'Buat Budget Baru' : 'Edit Budget'}</h3>
+                        <button onClick={() => setShowModal(false)} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition"><X size={20}/></button>
+                    </div>
+                    
                     <div className="space-y-4">
                         <div>
                             <label className="text-xs font-bold text-slate-500 mb-1 block">Kategori</label>
-                            <input list="categoryOptions" type="text" placeholder="Pilih atau ketik baru..." className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 outline-indigo-500 font-bold" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} />
+                            <input 
+                                list="categoryOptions" 
+                                type="text" 
+                                placeholder="Pilih atau ketik baru..." 
+                                className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white transition" 
+                                value={formData.category} 
+                                onChange={e => setFormData({...formData, category: e.target.value})} 
+                            />
                             <datalist id="categoryOptions">
                                 <option value="Makanan" /><option value="Transport" /><option value="Belanja" /><option value="Tagihan" /><option value="Hiburan" /><option value="Kesehatan" />
                             </datalist>
                         </div>
-                        <div><label className="text-xs font-bold text-slate-500 mb-1 block">Batas Maksimal (Rp)</label><input type="number" placeholder="0" className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 outline-indigo-500 font-bold text-lg" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} /></div>
-                        <div><label className="text-xs font-bold text-slate-500 mb-1 block">Detail (Opsional)</label><textarea placeholder="Misal: Makan Siang, Kopi" className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 outline-indigo-500 text-sm" onChange={e => setFormData({...formData, details: e.target.value.split(',').map(s => ({ name: s.trim() })).filter(x => x.name)})} /></div>
-                        <div className="flex gap-3 pt-2"><button onClick={() => setShowModal(false)} className="flex-1 py-3 text-slate-500 font-bold">Batal</button><button onClick={handleSaveBudget} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 shadow-lg">Simpan</button></div>
+                        <div>
+                            <label className="text-xs font-bold text-slate-500 mb-1 block">Batas Maksimal (Rp)</label>
+                            <NumberInput 
+                                value={formData.amount} 
+                                onChange={(val) => setFormData({...formData, amount: val})} 
+                                placeholder="0" 
+                                className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-lg outline-none focus:border-indigo-500 focus:bg-white transition" 
+                            />
+                        </div>
+                        <div>
+                            <label className="text-xs font-bold text-slate-500 mb-1 block">Detail (Opsional, pisahkan koma)</label>
+                            <textarea 
+                                placeholder="Misal: Makan Siang, Kopi, Jajan" 
+                                className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-medium text-slate-600 text-sm outline-none focus:border-indigo-500 focus:bg-white transition" 
+                                value={formData.details.map(d => d.name).join(', ')}
+                                onChange={e => setFormData({...formData, details: e.target.value.split(',').map(s => ({ name: s.trim() })).filter(x => x.name)})} 
+                            />
+                        </div>
+                        
+                        <div className="pt-2">
+                            <button onClick={handleSaveBudget} className="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold text-lg shadow-lg hover:scale-[1.02] transition active:scale-95">
+                                {modalMode === 'add' ? 'Simpan Budget' : 'Update Budget'}
+                            </button>
+                        </div>
                     </div>
                 </motion.div>
             </div>
         )}
       </AnimatePresence>
 
+      {/* NOTIFIKASI */}
       <AnimatePresence>
         {notif.show && (
-            <motion.div initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} className="fixed inset-0 z-[60] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-[70] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
                 <motion.div initial={{scale:0.9}} animate={{scale:1}} exit={{scale:0.9}} className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl text-center">
                     <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${notif.type === 'success' ? 'bg-green-100 text-green-600' : notif.type === 'error' ? 'bg-red-100 text-red-600' : notif.type === 'confirm' ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-100 text-slate-600'}`}>
                         {notif.type === 'success' ? <CheckCircle2 size={32}/> : notif.type === 'error' ? <AlertCircle size={32}/> : notif.type === 'confirm' ? <HelpCircle size={32}/> : <AlertCircle size={32}/>}
@@ -431,7 +566,7 @@ export default function BudgetPage() {
                         )}
                     </div>
                 </motion.div>
-            </motion.div>
+            </div>
         )}
       </AnimatePresence>
     </div>
