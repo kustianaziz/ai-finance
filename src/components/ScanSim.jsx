@@ -128,11 +128,29 @@ export default function ScanSim() {
     try {
       const result = await processImageInput(imageBase64, 'image/jpeg', categoryList);
       
-      const resolveWallet = (name) => {
-          if (!name) return null;
-          const found = userWallets.find(w => w.name.toLowerCase().includes(name.toLowerCase()));
+      // --- SMART WALLET MATCHER (FIXED) ---
+      const resolveWallet = (nameFromAI) => {
+          if (!nameFromAI) return null;
+          
+          // 1. Fungsi Bersih-bersih Nama
+          // Hapus kata 'bank', 'pt', spasi, dan ubah ke lowercase
+          const cleanName = (str) => str.toLowerCase().replace(/\b(bank|pt|tbk)\b/g, '').trim();
+          
+          const aiClean = cleanName(nameFromAI);
+
+          // 2. Cari yang COCOK
+          const found = userWallets.find(w => {
+              const wClean = cleanName(w.name);
+              // Cek apakah 'bjb' ada di 'bjb' (Exact) ATAU saling mengandung
+              return wClean === aiClean || wClean.includes(aiClean) || aiClean.includes(wClean);
+          });
+
+          // 3. Jika ketemu, pakai yang ada. Jika tidak, buat baru dengan nama rapi.
           if (found) return { ...found, isNew: false };
-          return { id: null, name: name.charAt(0).toUpperCase() + name.slice(1), isNew: true };
+          
+          // Format nama baru (Capitalize)
+          const properName = nameFromAI.charAt(0).toUpperCase() + nameFromAI.slice(1);
+          return { id: null, name: properName, isNew: true };
       };
 
       let finalSource = resolveWallet(result.source_wallet);
@@ -173,6 +191,7 @@ export default function ScanSim() {
     userWallets.forEach(w => { walletCache[w.name.toLowerCase()] = w.id; });
 
     try {
+      // 1. GET / CREATE WALLET ID
       const getOrCreateWalletId = async (wObj) => {
           if (!wObj) return null;
           const key = wObj.name.toLowerCase();
@@ -186,23 +205,78 @@ export default function ScanSim() {
       };
 
       const sourceId = await getOrCreateWalletId(aiResult.sourceWallet);
-      const destId = await getOrCreateWalletId(aiResult.destWallet);
 
-      const { data: headerData, error: headerError } = await supabase.from('transaction_headers').insert([{
-        user_id: user.id, merchant: aiResult.merchant, total_amount: aiResult.amount,
-        type: aiResult.type, allocation_type: aiResult.allocation_type, category: aiResult.category, 
-        date: aiResult.date || new Date().toISOString(), wallet_id: sourceId, destination_wallet_id: destId, 
-        receipt_url: "Scan V13 (Smart Logic)", is_ai_generated: true, is_journalized: false
-      }]).select().single();
+      // --- LOGIC BARU: PECAH TRANSFER JADI 2 TRANSAKSI (DOUBLE ENTRY) ---
+      if (aiResult.type === 'transfer') {
+          const destId = await getOrCreateWalletId(aiResult.destWallet);
 
-      if (headerError) throw headerError;
-      if (aiResult.items) {
-        await supabase.from('transaction_items').insert(aiResult.items.map(i => ({ header_id: headerData.id, name: i.name, price: i.price, qty: 1 })));
+          // A. CATAT PENGELUARAN DI SUMBER (Keluar Duit)
+          const { error: errOut } = await supabase.from('transaction_headers').insert([{
+              user_id: user.id,
+              merchant: `Transfer ke ${aiResult.destWallet?.name || 'Rekening'}`, 
+              total_amount: aiResult.amount,
+              type: 'expense', // Tipe jadi EXPENSE agar trigger jalan (Potong Saldo)
+              allocation_type: aiResult.allocation_type,
+              category: 'Mutasi Saldo', // Kategori Khusus
+              date: aiResult.date || new Date().toISOString(),
+              wallet_id: sourceId, // Dompet Sumber
+              receipt_url: "Scan Input (Mutasi Out)",
+              is_ai_generated: true,
+              is_journalized: false
+          }]);
+
+          if (errOut) throw errOut;
+
+          // B. CATAT PEMASUKAN DI TUJUAN (Terima Duit)
+          const { error: errIn } = await supabase.from('transaction_headers').insert([{
+              user_id: user.id,
+              merchant: `Terima dari ${aiResult.sourceWallet?.name || 'Rekening'}`, 
+              total_amount: aiResult.amount,
+              type: 'income', // Tipe jadi INCOME agar trigger jalan (Tambah Saldo)
+              allocation_type: aiResult.allocation_type,
+              category: 'Mutasi Saldo', 
+              date: aiResult.date || new Date().toISOString(),
+              wallet_id: destId, // Dompet Tujuan
+              receipt_url: "Scan Input (Mutasi In)",
+              is_ai_generated: true,
+              is_journalized: false
+          }]);
+
+          if (errIn) throw errIn;
+
+      } else {
+          // --- TRANSAKSI BIASA (INCOME / EXPENSE) ---
+          const { data: headerData, error: headerError } = await supabase.from('transaction_headers').insert([{
+            user_id: user.id, 
+            merchant: aiResult.merchant, 
+            total_amount: aiResult.amount,
+            type: aiResult.type, 
+            allocation_type: aiResult.allocation_type, 
+            category: aiResult.category, 
+            date: aiResult.date || new Date().toISOString(), 
+            wallet_id: sourceId, 
+            // Hapus destination_wallet_id
+            receipt_url: "Scan V13 (Smart Logic)", 
+            is_ai_generated: true, 
+            is_journalized: false
+          }]).select().single();
+
+          if (headerError) throw headerError;
+
+          // Simpan Detail Item (Hanya jika bukan transfer/mutasi)
+          if (aiResult.items && aiResult.items.length > 0) {
+            await supabase.from('transaction_items').insert(aiResult.items.map(i => ({ header_id: headerData.id, name: i.name, price: i.price, qty: 1 })));
+          }
       }
 
       if (matchedBill && linkToBill) await markBillAsPaid(matchedBill.id);
       navigate('/dashboard');
-    } catch (e) { alert(e.message); } finally { setSaving(false); }
+    } catch (e) { 
+        console.error(e);
+        alert('Gagal simpan: ' + e.message); 
+    } finally { 
+        setSaving(false); 
+    }
   };
 
   return (

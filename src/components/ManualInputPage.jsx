@@ -231,13 +231,17 @@ export default function ManualInputPage() {
       setAiResult(updatedList);
   };
 
+// --- SAVE LOGIC (FIXED: SPLIT TRANSFER & NO INVALID COLUMN) ---
   const handleSave = async () => {
     if (!user || !aiResult) return;
     setSaving(true);
+    
+    // 1. MEMORY CACHE (Untuk Wallet Baru)
     let walletCache = {}; 
     userWallets.forEach(w => { walletCache[w.name.toLowerCase()] = w.id; });
 
     try {
+      // Helper: Get or Create Wallet ID
       const getOrCreateWalletId = async (wObj) => {
           if (!wObj) return null;
           const key = wObj.name.toLowerCase();
@@ -256,28 +260,88 @@ export default function ManualInputPage() {
           return data.id;
       };
 
+      // 2. LOOP SEQUENTIAL
       for (const txn of aiResult) {
           const sourceId = await getOrCreateWalletId(txn.sourceWallet);
-          const destId = await getOrCreateWalletId(txn.destWallet);
 
-          const { data: headerData, error: headerError } = await supabase
-            .from('transaction_headers')
-            .insert([{
-              user_id: user.id, merchant: txn.merchant, total_amount: txn.total_amount,
-              type: txn.type, allocation_type: txn.allocation_type, category: txn.category, 
-              date: txn.date, wallet_id: sourceId, destination_wallet_id: destId, 
-              receipt_url: "AI Smart Input V8 (Full Polished)", is_ai_generated: true, is_journalized: false
-            }]).select().single();
+          // --- LOGIC: PECAH TRANSFER JADI 2 TRANSAKSI ---
+          if (txn.type === 'transfer') {
+              const destId = await getOrCreateWalletId(txn.destWallet);
 
-          if (headerError) throw headerError;
-          await supabase.from('transaction_items').insert([{
-             header_id: headerData.id, name: txn.merchant, price: txn.total_amount, qty: 1
-          }]);
+              // A. CATAT PENGELUARAN DI SUMBER (Keluar Duit)
+              // Note: Merchant kita isi dengan "Transfer ke [Nama Tujuan]" biar jelas di history
+              const { error: errOut } = await supabase.from('transaction_headers').insert([{
+                  user_id: user.id,
+                  merchant: `Transfer ke ${txn.destWallet?.name || 'Rekening'}`, 
+                  total_amount: txn.total_amount,
+                  type: 'expense', // Tipe jadi EXPENSE agar trigger jalan (Potong Saldo)
+                  allocation_type: txn.allocation_type,
+                  category: 'Mutasi Saldo', 
+                  date: txn.date,
+                  wallet_id: sourceId, // Dompet Sumber
+                  receipt_url: "Manual Input (Mutasi Out)",
+                  is_ai_generated: true,
+                  is_journalized: false
+              }]);
+
+              if (errOut) throw errOut;
+
+              // B. CATAT PEMASUKAN DI TUJUAN (Terima Duit)
+              // Note: Merchant kita isi dengan "Terima dari [Nama Sumber]"
+              const { error: errIn } = await supabase.from('transaction_headers').insert([{
+                  user_id: user.id,
+                  merchant: `Terima dari ${txn.sourceWallet?.name || 'Rekening'}`, 
+                  total_amount: txn.total_amount,
+                  type: 'income', // Tipe jadi INCOME agar trigger jalan (Tambah Saldo)
+                  allocation_type: txn.allocation_type,
+                  category: 'Mutasi Saldo', 
+                  date: txn.date,
+                  wallet_id: destId, // Dompet Tujuan
+                  receipt_url: "Manual Input (Mutasi In)",
+                  is_ai_generated: true,
+                  is_journalized: false
+              }]);
+
+              if (errIn) throw errIn;
+
+          } else {
+              // --- TRANSAKSI BIASA (INCOME / EXPENSE) ---
+              const { data: headerData, error: headerError } = await supabase
+                .from('transaction_headers')
+                .insert([{
+                  user_id: user.id,
+                  merchant: txn.merchant,
+                  total_amount: txn.total_amount,
+                  type: txn.type,
+                  allocation_type: txn.allocation_type,
+                  category: txn.category, 
+                  date: txn.date, 
+                  wallet_id: sourceId, 
+                  // Hapus destination_wallet_id karena bukan transfer lagi
+                  receipt_url: "AI Smart Input V9", 
+                  is_ai_generated: true,
+                  is_journalized: false
+                }])
+                .select()
+                .single();
+
+              if (headerError) throw headerError;
+
+              // Simpan Item Detail
+              await supabase.from('transaction_items').insert([{
+                 header_id: headerData.id,
+                 name: txn.merchant,
+                 price: txn.total_amount,
+                 qty: 1
+              }]);
+          }
       }
 
       if (matchedBill && linkToBill) await markBillAsPaid(matchedBill.id);
       navigate('/dashboard');
+
     } catch (error) {
+      console.error(error);
       alert('Gagal simpan: ' + error.message);
     } finally {
       setSaving(false);

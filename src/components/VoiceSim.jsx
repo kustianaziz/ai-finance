@@ -317,27 +317,76 @@ export default function VoiceSim() {
 
       for (const txn of aiResult) {
           const sourceId = await getOrCreateWalletId(txn.sourceWallet);
-          const destId = await getOrCreateWalletId(txn.destWallet);
 
-          const { data: headerData, error: headerError } = await supabase
-            .from('transaction_headers')
-            .insert([{
-              user_id: user.id, merchant: txn.merchant, total_amount: txn.total_amount,
-              type: txn.type, allocation_type: txn.allocation_type, category: txn.category, 
-              date: txn.date, wallet_id: sourceId, destination_wallet_id: destId, 
-              receipt_url: "Voice V6 (Smart Sequential)", is_ai_generated: true, is_journalized: false
-            }]).select().single();
+          // --- LOGIC BARU: PECAH TRANSFER JADI 2 TRANSAKSI ---
+          if (txn.type === 'transfer') {
+              const destId = await getOrCreateWalletId(txn.destWallet);
 
-          if (headerError) throw headerError;
-          await supabase.from('transaction_items').insert([{
-             header_id: headerData.id, name: txn.merchant, price: txn.total_amount, qty: 1
-          }]);
+              // 1. CATAT PENGELUARAN DI SUMBER (Keluar Duit)
+              const { error: errOut } = await supabase.from('transaction_headers').insert([{
+                  user_id: user.id,
+                  merchant: `Transfer ke ${txn.destWallet?.name || 'Rekening'}`, 
+                  total_amount: txn.total_amount,
+                  type: 'expense', // Tipe jadi EXPENSE
+                  allocation_type: txn.allocation_type,
+                  category: 'Mutasi Saldo', // Kategori Khusus
+                  date: txn.date,
+                  wallet_id: sourceId, // Dompet Sumber
+                  receipt_url: "Voice Input (Mutasi Out)",
+                  is_ai_generated: true,
+                  is_journalized: false
+              }]);
+
+              if (errOut) throw errOut;
+
+              // 2. CATAT PEMASUKAN DI TUJUAN (Terima Duit)
+              const { error: errIn } = await supabase.from('transaction_headers').insert([{
+                  user_id: user.id,
+                  merchant: `Terima dari ${txn.sourceWallet?.name || 'Rekening'}`, 
+                  total_amount: txn.total_amount,
+                  type: 'income', // Tipe jadi INCOME
+                  allocation_type: txn.allocation_type,
+                  category: 'Mutasi Saldo', // Kategori Khusus
+                  date: txn.date,
+                  wallet_id: destId, // Dompet Tujuan
+                  receipt_url: "Voice Input (Mutasi In)",
+                  is_ai_generated: true,
+                  is_journalized: false
+              }]);
+
+              if (errIn) throw errIn;
+
+          } else {
+              // --- TRANSAKSI BIASA (INCOME / EXPENSE) ---
+              const { data: headerData, error: headerError } = await supabase
+                .from('transaction_headers')
+                .insert([{
+                  user_id: user.id,
+                  merchant: txn.merchant,
+                  total_amount: txn.total_amount,
+                  type: txn.type,
+                  allocation_type: txn.allocation_type,
+                  category: txn.category, 
+                  date: txn.date, 
+                  wallet_id: sourceId, 
+                  // Hapus destination_wallet_id
+                  receipt_url: "Voice V6 (Smart Sequential)", 
+                  is_ai_generated: true, 
+                  is_journalized: false
+                }]).select().single();
+
+              if (headerError) throw headerError;
+              
+              await supabase.from('transaction_items').insert([{
+                 header_id: headerData.id, name: txn.merchant, price: txn.total_amount, qty: 1
+              }]);
+          }
       }
 
       if (matchedBill && linkToBill) await markBillAsPaid(matchedBill.id);
       navigate('/dashboard');
     } catch (error) {
-      alert('Gagal simpan');
+      alert('Gagal simpan: ' + error.message);
     } finally {
       setSaving(false);
     }

@@ -23,7 +23,12 @@ export default function Dashboard() {
       return saved ? JSON.parse(saved) : null;
   });
   
-  const [summary, setSummary] = useState({ income: 0, expense: 0, balance: 0 });
+  const [summary, setSummary] = useState({ 
+    income: 0, 
+    expense: 0, 
+    balance: 0,       // Saldo Akhir (Real-time)
+    openingBalance: 0 // Saldo Awal Bulan
+});
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(!profile); 
   const [billAlert, setBillAlert] = useState(0);
@@ -53,6 +58,7 @@ export default function Dashboard() {
   }, [activeMode]);
 
   // --- FUNGSI UTAMA (DIPERBAIKI: FILTER MODE) ---
+  // --- FUNGSI UTAMA (LOGIC SALDO & ARUS KAS FIXED) ---
   const loadDashboardData = async () => {
     try {
         if (!profile) setLoading(true); 
@@ -60,98 +66,97 @@ export default function Dashboard() {
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
-        // 1. CEK PROFIL (HEMAT REQUEST)
+        // 1. CEK PROFIL
         let currentUserProfile = profile; 
-
         if (!currentUserProfile) {
             const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single();
             if (data) {
                 currentUserProfile = data;
                 setProfile(data); 
                 localStorage.setItem('user_profile_cache', JSON.stringify(data)); 
-                
                 const isPersonalGroup = ['personal', 'personal_pro'].includes(data.account_type);
-                if (isPersonalGroup) {
-                    // Paksa mode PERSONAL jika user tipe personal
-                    if (activeMode !== 'PERSONAL') setActiveMode('PERSONAL');
-                } else if (!localStorage.getItem('app_mode')) {
-                    // Set default mode untuk Business/Org jika belum ada cache
-                    setActiveMode(data.account_type === 'business' ? 'BUSINESS' : 'ORGANIZATION');
-                }
+                if (isPersonalGroup && activeMode !== 'PERSONAL') setActiveMode('PERSONAL');
             }
         }
 
-        // --- FILTER QUERY BERDASARKAN MODE ---
-        // Mapping Mode App ke Nilai Database 'allocation_type'
-        // PERSONAL -> ['PERSONAL', 'PRIVE']
-        // BUSINESS -> ['BUSINESS', 'SALARY']
-        // ORGANIZATION -> ['BUSINESS', 'SALARY'] (Asumsi Org pakai struktur yg sama/mirip)
-        
-        let allocationFilter = [];
-        if (activeMode === 'PERSONAL') {
-            allocationFilter = ['PERSONAL', 'PRIVE'];
-        } else {
-            allocationFilter = ['BUSINESS', 'SALARY'];
-        }
+        // 2. FILTER MODE
+        // Filter untuk Transaksi (History/Summary)
+        let allocationFilter = activeMode === 'PERSONAL' ? ['PERSONAL', 'PRIVE'] : ['BUSINESS', 'SALARY'];
+        // Filter untuk Wallet (Saldo Utama)
+        let walletModeFilter = activeMode === 'PERSONAL' ? 'PERSONAL' : activeMode;
 
-        // 2. FETCH DATA (PARALLEL)
-        const [summaryRes, recentRes, billsRes] = await Promise.all([
-            // A. Ringkasan Saldo (FILTERED)
+        // 3. FETCH DATA (PARALLEL)
+        const [summaryRes, recentRes, billsRes, walletRes] = await Promise.all([
+            // A. Ringkasan Pemasukan/Pengeluaran (Bulan Ini)
             supabase.from('transaction_headers')
-                .select('type, total_amount')
+                .select('type, total_amount, category') // <--- PENTING: Tambah 'category' biar bisa filter Mutasi
                 .eq('user_id', user.id)
                 .gte('date', startOfMonth)
-                .in('allocation_type', allocationFilter), // <--- FILTER PENTING
+                .in('allocation_type', allocationFilter),
 
-            // B. Transaksi Terakhir (FILTERED)
+            // B. Transaksi Terakhir
             supabase.from('transaction_headers')
                 .select('*')
                 .eq('user_id', user.id)
-                .in('allocation_type', allocationFilter) // <--- FILTER PENTING
+                .in('allocation_type', allocationFilter)
                 .order('date', { ascending: false })
                 .limit(5),
 
-            // C. Cek Tagihan (Tagihan biasanya global user, tapi bisa difilter jika ada field type)
-            // Untuk saat ini tagihan kita anggap global per user (Personal Reminder)
-            supabase.from('bills').select('*').eq('user_id', user.id)
+            // C. Cek Tagihan
+            supabase.from('bills').select('*').eq('user_id', user.id),
+
+            // D. SALDO UTAMA (Dari Tabel Wallets)
+            supabase.from('wallets')
+                .select('initial_balance')
+                .eq('user_id', user.id)
+                .eq('allocation_type', walletModeFilter)
         ]);
 
-        // --- PROCESS SUMMARY ---
-        if (summaryRes.data) {
-            let inc = 0, exp = 0;
-            for (let i = 0; i < summaryRes.data.length; i++) {
-                const t = summaryRes.data[i];
-                if (t.type === 'income') inc += Number(t.total_amount);
-                else exp += Number(t.total_amount);
-            }
-            setSummary({ income: inc, expense: exp, balance: inc - exp });
+        // --- HITUNG SALDO UTAMA (REAL ASSETS) ---
+        let totalBalanceFromWallets = 0;
+        if (walletRes.data) {
+            totalBalanceFromWallets = walletRes.data.reduce((acc, curr) => acc + Number(curr.initial_balance), 0);
         }
 
-        // --- PROCESS RECENT ---
-        if (recentRes.data) {
-            setTransactions(recentRes.data);
+        // --- HITUNG ARUS KAS BULANAN (INCOME vs EXPENSE) ---
+        let inc = 0, exp = 0;
+        if (summaryRes.data) {
+            summaryRes.data.forEach(t => {
+                if (t.category === 'Mutasi Saldo') return; 
+                if (t.type === 'income') inc += Number(t.total_amount);
+                else if (t.type === 'expense') exp += Number(t.total_amount);
+            });
         }
+
+        // Net Cash Flow bulan ini
+        const netFlow = inc - exp;
+        // Saldo sebelum bulan ini dimulai
+        const openingBalance = totalBalanceFromWallets - netFlow;   
+        
+        // UPDATE STATE
+        // Balance: Dari Wallet (Akurat)
+        // Income/Expense: Dari Transaksi Bulan Ini (Tanpa Mutasi)
+        setSummary({ 
+            income: inc, 
+            expense: exp, 
+            balance: totalBalanceFromWallets, // Saldo Akhir
+            openingBalance: openingBalance    // Saldo Awal
+        });
+
+        if (recentRes.data) setTransactions(recentRes.data);
 
         // --- PROCESS BILL ALERT ---
         if (billsRes.data) {
             const today = new Date();
             const currentDay = today.getDate();
-            const currentMonth = today.getMonth();
-            const currentYear = today.getFullYear();
-
             const alertCount = billsRes.data.filter(bill => {
                 let isPaid = false;
                 if (bill.last_paid_at) {
                     const paidDate = new Date(bill.last_paid_at);
-                    if (paidDate.getMonth() === currentMonth && paidDate.getFullYear() === currentYear) {
-                        isPaid = true;
-                    }
+                    if (paidDate.getMonth() === today.getMonth() && paidDate.getFullYear() === today.getFullYear()) isPaid = true;
                 }
-                const daysUntilDue = bill.due_date - currentDay;
-                const isUrgent = daysUntilDue <= 3; 
-                return !isPaid && isUrgent;
+                return !isPaid && (bill.due_date - currentDay <= 3);
             }).length;
-
             setBillAlert(alertCount);
         }
 
@@ -212,17 +217,17 @@ export default function Dashboard() {
            let allocationFilter = activeMode === 'PERSONAL' ? ['PERSONAL', 'PRIVE'] : ['BUSINESS', 'SALARY'];
 
            const { data: history } = await supabase.from('transaction_headers')
-                .select('*')
-                .eq('user_id', user.id)
-                .gte('date', startOfMonth)
-                .in('allocation_type', allocationFilter) // <--- FILTER
-                .order('date', { ascending: false });
+            .select('*')
+            .eq('user_id', user.id)
+            .gte('date', startOfMonth)
+            .in('allocation_type', allocationFilter) 
+            .order('date', { ascending: false });
            
-           const insights = await generateFinancialInsights(history || []);
+           const insights = await generateFinancialInsights(history || [], user.id);
            setAiTips(insights.length ? insights : ["Belum cukup data bulan ini untuk mode ini. Yuk catat transaksi! 📝"]);
         } catch (e) { 
-            console.error("AI Error:", e);
-            setAiTips(["AI sedang sibuk. Coba lagi nanti! 😴"]); 
+            console.error("Vizo Pusing:", e);
+            setAiTips(["Vizo sedang sibuk. Coba lagi nanti! 😴"]); 
         } finally { 
             setLoadingTips(false); 
         }
@@ -307,50 +312,97 @@ export default function Dashboard() {
             </div>
          </div>
 
-         <div className="text-center text-white relative z-10">
-            <p className="text-white/80 text-sm mb-1">
-                {activeMode === 'PERSONAL' ? 'Dompet Pribadi' : 'Kas Operasional'}
+         {/* AREA SALDO (KLIK UNTUK KE WALLETS) */}
+         <motion.div 
+            className="text-center text-white relative z-10 mt-2 cursor-pointer group"
+            whileTap={{ scale: 0.95 }}
+            onClick={() => navigate('/wallets')}
+         >
+            <p className="text-white/80 text-sm mb-1 flex items-center justify-center gap-1.5 transition-colors group-hover:text-white">
+                <Wallet size={14} className="opacity-70 group-hover:opacity-100"/>
+                {activeMode === 'PERSONAL' ? 'Total Saldo Dompet' : 'Kas Operasional'}
+                <ChevronRight size={12} className="opacity-50 group-hover:opacity-100 group-hover:translate-x-1 transition-transform"/>
             </p>
+            
             <h2 className="text-4xl font-extrabold tracking-tight mb-2 min-h-[40px]">
                {loading && summary.balance === 0 ? (
                    <span className="animate-pulse opacity-50">...</span> 
                ) : formatIDR(summary.balance)}
             </h2>
             
-            {profile?.account_type === 'personal' && (
-               <div onClick={() => setShowUpsell(true)} className="inline-flex items-center gap-1 bg-white/20 px-3 py-1 rounded-full text-[10px] font-bold border border-white/30 cursor-pointer hover:bg-white/30 transition">
-                  <span>🚀 Upgrade Fitur</span>
-                  <ChevronRight size={12}/>
-               </div>
-            )}
-            
-            {profile?.account_type === 'personal_pro' && (
-               <div className="inline-flex items-center gap-1 bg-amber-400/20 px-3 py-1 rounded-full text-[10px] font-bold border border-amber-400/50 text-amber-100">
-                  <Crown size={12} fill="currentColor" className="text-amber-300"/>
-                  <span>Personal Pro</span>
-               </div>
-            )}
+            {/* BADGE UPGRADE (STOP PROPAGATION AGAR TIDAK KE WALLETS SAAT DIKLIK) */}
+            <div className="flex flex-col items-center gap-2">
+                {profile?.account_type === 'personal' && (
+                   <div 
+                        onClick={(e) => { e.stopPropagation(); setShowUpsell(true); }} 
+                        className="inline-flex items-center gap-1 bg-white/20 px-3 py-1 rounded-full text-[10px] font-bold border border-white/30 hover:bg-white/30 transition"
+                   >
+                      <span>🚀 Upgrade Fitur</span>
+                      <ChevronRight size={12}/>
+                   </div>
+                )}
+                
+                {profile?.account_type === 'personal_pro' && (
+                   <div className="inline-flex items-center gap-1 bg-amber-400/20 px-3 py-1 rounded-full text-[10px] font-bold border border-amber-400/50 text-amber-100">
+                      <Crown size={12} fill="currentColor" className="text-amber-300"/>
+                      <span>Personal Pro</span>
+                   </div>
+                )}
 
-            {!isPersonalUser && activeMode === 'PERSONAL' && (
-               <div onClick={toggleMode} className="inline-flex items-center gap-1 bg-white/20 px-3 py-1 rounded-full text-[10px] font-bold border border-white/30 cursor-pointer hover:bg-white/30 transition">
-                  {profile?.account_type === 'organization' ? <Users size={12}/> : <Briefcase size={12}/>}
-                  <span>{profile?.account_type === 'organization' ? 'Kembali ke Organisasi' : 'Kembali ke Bisnis'}</span>
-               </div>
-            )}
-         </div>
+                {!isPersonalUser && activeMode === 'PERSONAL' && (
+                   <div 
+                        onClick={(e) => { e.stopPropagation(); toggleMode(); }} 
+                        className="inline-flex items-center gap-1 bg-white/20 px-3 py-1 rounded-full text-[10px] font-bold border border-white/30 hover:bg-white/30 transition"
+                   >
+                      {profile?.account_type === 'organization' ? <Users size={12}/> : <Briefcase size={12}/>}
+                      <span>Kembali ke {profile?.account_type === 'organization' ? 'Organisasi' : 'Bisnis'}</span>
+                   </div>
+                )}
+            </div>
+         </motion.div>
       </div>
 
-      {/* CARD SUMMARY */}
+      {/* CARD SUMMARY (OPTIMIZED FLOW) */}
       <div className="px-6 -mt-12 relative z-20">
-         <div className="bg-white p-4 rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100 flex justify-between items-center">
-            <div className="flex-1 flex flex-col items-center border-r border-slate-100">
-               <div className="flex items-center gap-1 text-green-500 text-xs font-bold mb-1"><ArrowDownLeft size={14}/> Pemasukan</div>
-               <span className="font-bold text-slate-800">{formatIDR(summary.income)}</span>
+         <div className="bg-white p-5 rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100 flex flex-col gap-4">
+            
+            {/* Baris 1: Saldo Awal & Akhir */}
+            <div className="flex justify-between items-center border-b border-slate-50 pb-3">
+                <div className="flex flex-col">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Saldo Awal Bulan</span>
+                    <span className="text-sm font-bold text-slate-600">{formatIDR(summary.openingBalance)}</span>
+                </div>
+                <div className="text-right flex flex-col">
+                    <span className="text-[10px] font-bold text-indigo-500 uppercase tracking-wider">Saldo Akhir</span>
+                    <span className="text-lg font-extrabold text-slate-800">{formatIDR(summary.balance)}</span>
+                </div>
             </div>
-            <div className="flex-1 flex flex-col items-center">
-               <div className="flex items-center gap-1 text-red-500 text-xs font-bold mb-1"><ArrowUpRight size={14}/> Pengeluaran</div>
-               <span className="font-bold text-slate-800">{formatIDR(summary.expense)}</span>
+
+            {/* Baris 2: Income & Expense (Arus Kas Bulan Ini) */}
+            <div className="flex justify-between items-center">
+               <div className="flex items-center gap-3">
+                   <div className="w-8 h-8 rounded-full bg-green-50 flex items-center justify-center text-green-600">
+                       <ArrowDownLeft size={16}/>
+                   </div>
+                   <div className="flex flex-col">
+                       <span className="text-[10px] text-slate-400 font-medium">Pemasukan</span>
+                       <span className="text-sm font-bold text-slate-800">{formatIDR(summary.income)}</span>
+                   </div>
+               </div>
+               
+               <div className="h-8 w-px bg-slate-100"></div>
+
+               <div className="flex items-center gap-3 justify-end">
+                   <div className="flex flex-col items-end">
+                       <span className="text-[10px] text-slate-400 font-medium">Pengeluaran</span>
+                       <span className="text-sm font-bold text-slate-800">{formatIDR(summary.expense)}</span>
+                   </div>
+                   <div className="w-8 h-8 rounded-full bg-red-50 flex items-center justify-center text-red-600">
+                       <ArrowUpRight size={16}/>
+                   </div>
+               </div>
             </div>
+
          </div>
       </div>
 
