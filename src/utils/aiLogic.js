@@ -285,6 +285,7 @@ export const generateFinancialInsights = async (transactions, userId) => {
         5. [Reminder transaksi] : cek data transaksi reminder jika ada transaksi yang nominal nya jauh dari rata - rata pengeluaran biasa. informasikan rata - rata pengeluaran user tersebut berdasarkan data transaksi nya.
         6. [Reminder pemasukan] : ingatkan user saat ini pemasukan nya dari apa saja, dan rata - rata berapa. berikan saran positive yang memotivasi.
         7. [Saran Bisnis] : Berikan kesimpulan Akhir, dengan kondisi keuangan yang ada, kemudian melihat kondisi status tagihan, dan transaksi pengeluaran, berikan saran untuk meningkatkan pemasukan termasuk peluang bisnis yang bisa dilakukan.
+        8. [gambaran sisa saldo] : berikan prediksi sisa saldo dengan membandingkan, saldo awal, transaksi masuk, transaksi keluar dan budget pengeluaran bulan ini sebutkan prediksi sisa dana bulan ini 
       
 
         ATURAN OUTPUT:
