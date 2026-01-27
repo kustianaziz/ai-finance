@@ -9,7 +9,7 @@ import {
 // --- IMPORT LOGO DI SINI ---
 // Pastikan path-nya sesuai dengan tempat abang simpan gambar
 // Jika error, cek apakah nama filenya benar (misal .jpg atau .png)
-import logoVizofin from '../assets/vizofin.png'; 
+import logoVizofin from '../assets/vizofinhorizontal.png'; 
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -39,14 +39,14 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col justify-center items-center p-4 font-sans">
+    <div className="min-h-screen bg-white flex flex-col justify-center items-center p-4 font-sans">
       
       {/* === KARTU LOGIN UTAMA === */}
       <motion.div 
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.4, ease: "easeOut" }}
-        className="bg-white w-full max-w-[420px] p-8 md:p-10 rounded-3xl shadow-2xl shadow-indigo-100 text-center border border-white"
+        className="bg-white w-full max-w-[420px] p-4 md:p-6 text-center border-white"
       >
         
         {/* === BAGIAN LOGO BARU === */}
@@ -57,10 +57,10 @@ export default function LoginPage() {
                 transition={{ type: "spring", stiffness: 300 }}
                 src={logoVizofin} 
                 alt="Vizofin Logo" 
-                className="w-20 h-auto object-contain drop-shadow-sm" 
+                className="w-40 h-auto object-contain drop-shadow-sm" 
             />
             {/* Karena di logo sudah ada tulisan 'VIZOFIN', kita tidak perlu teks H2 lagi biar rapi */}
-            <p className="text-slate-400 text-sm font-medium mt-2">Smart Financial Companion</p>
+            <p className="text-slate-400 text-sm font-medium mt-2">Smart Financial Assistant</p>
         </div>
         
         {/* PESAN ERROR */}
