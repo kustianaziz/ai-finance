@@ -41,7 +41,12 @@ export const processVoiceInput = async (text, userCategories = []) => {
     
     ALLOWED CATEGORIES: [${categoryListString}, Mutasi Saldo]
     
-    Task: Ekstrak daftar transaksi ke JSON.
+    Task: Ekstrak daftar transaksi ke JSON. WAJIB pisahkan Pajak dan Biaya Admin jika disebutkan.
+
+    RULES FOR FEES & TAX:
+    1. Jika ada kata "pajak", "tax", "ppn" -> Masukkan ke field 'tax'.
+    2. Jika ada kata "admin", "biaya layanan", "Biaya Administrasi", "Pembulatan", "fee" -> Masukkan ke field 'admin_fee'.
+    3. 'total_amount' adalah TOTAL KESELURUHAN (Harga Barang + Pajak + Admin).
 
     RULES FOR WALLET DETECTION (CRITICAL):
     1. Cari kata kunci Bank/E-Wallet: "BCA", "Mandiri", "BRI", "BNI", "BSI", "Jago", "Jenius", "Seabank", "Gopay", "Ovo", "Dana", "ShopeePay", "LinkAja", "Tunai", "Cash", "Dompet".
@@ -67,7 +72,9 @@ export const processVoiceInput = async (text, userCategories = []) => {
     [
       {
         "merchant": string (Nama barang/toko/keterangan),
-        "total_amount": number (Hanya angka),
+        "total_amount": number (GRAND TOTAL),
+        "admin_fee": number (0 if none),
+        "tax": number (0 if none),
         "date": string (YYYY-MM-DD),
         "category": string,
         "type": "expense" | "income" | "transfer",
@@ -80,7 +87,7 @@ export const processVoiceInput = async (text, userCategories = []) => {
     const chatCompletion = await groq.chat.completions.create({
       messages: [{ role: "user", content: prompt }],
       model: MODEL_NAME,
-      temperature: 0, // Wajib 0 agar output konsisten & patuh
+      temperature: 0,
       response_format: { type: "json_object" }
     });
 
@@ -114,7 +121,7 @@ export const processVoiceInput = async (text, userCategories = []) => {
   }
 };
 
-// --- FUNGSI 2: SCAN GAMBAR (OPTIMIZED FOR BJB & LOCAL BANKS) ---
+// --- FUNGSI 2: SCAN GAMBAR (OPTIMIZED FOR BJB, LOCAL BANKS, & FEES) ---
 export const processImageInput = async (fileBase64, mimeType, userCategories = []) => {
   try {
     const categoryListString = buildCategoryPrompt(userCategories);
@@ -122,13 +129,15 @@ export const processImageInput = async (fileBase64, mimeType, userCategories = [
     const prompt = `
     Role: Expert Indonesian Bank Receipt Analyzer.
     
-    Task: Extract transaction data strictly into valid JSON.
+    Task: Extract transaction data strictly into valid JSON. You MUST detect and separate Admin Fees and Taxes.
     
     Output Schema:
     {
       "merchant": "Store Name OR Receiver Name (if transfer)",
       "date": "YYYY-MM-DD", 
-      "amount": Total Amount (number),
+      "amount": Number (GRAND TOTAL PAID including Fees & Tax),
+      "admin_fee": Number (Biaya Admin/Jasa/Handling. 0 if none),
+      "tax": Number (PPN/Tax. 0 if none),
       "category": "CategoryString", 
       "type": "expense" or "transfer",
       "source_wallet": "Sender Bank/Wallet (e.g. BJB, BCA)",
@@ -138,26 +147,33 @@ export const processImageInput = async (fileBase64, mimeType, userCategories = [
     
     ALLOWED CATEGORIES: [${categoryListString}, Mutasi Saldo]
 
-    CRITICAL RULES FOR TRANSFER DETECTION:
-    1. Look for keywords: "Top Up", "Transfer Antar Bank", "Bank Yang Dituju", "Rekening Tujuan", "Berita Transfer", "M-Transfer".
-    2. IF FOUND, SET type = "transfer" AND category = "Mutasi Saldo".
-    3. SET merchant = Receiver Name (e.g., "SIFA USWATUN...").
-    
-    4. EXTRACT SOURCE WALLET (PENTING):
+    CRITICAL RULES:
+
+    1. **TRANSFER DETECTION**:
+       - Look for keywords: "Top Up", "Transfer Antar Bank", "Bank Yang Dituju", "Rekening Tujuan", "Berita Transfer", "M-Transfer".
+       - IF FOUND, SET type = "transfer" AND category = "Mutasi Saldo".
+       - SET merchant = Receiver Name (e.g., "SIFA USWATUN...").
+
+    2. **FEES & TAX EXTRACTION (NEW)**:
+       - **Admin Fee**: Look for "Biaya Admin", "Adm Bank", "Biaya Jasa", "Biaya Transaksi", "Admin". Extract this value to "admin_fee".
+       - **Tax**: Look for "PPN", "Pajak", "Tax", "PB1". Extract this value to "tax".
+       - **IMPORTANT**: The "amount" field in JSON must be the TOTAL PAYMENT (Main Amount + Admin Fee + Tax).
+
+    3. **EXTRACT SOURCE WALLET (PENTING)**:
        - Look for: "Dari Bank", "Dari Rekening", "Rekening Asal", "Sumber Rekening", "Sumber Bank".
        - Determine the bank logo/header (e.g., "bank bjb", "BCA", "Livin").
        - Example: Header "bank bjb" -> source_wallet = "BJB".
 
-    5. EXTRACT DESTINATION WALLET (PENTING):
-       - Look strictly for: "Bank Yang Dituju", "Bank Tujuan", "Ke Bank","Ke Rek" "Bank Penerima", "Ke Rekening", "Tujuan Transfer", "KEPADA", "Dana", "Go-Pay", "Sohpee Pay".
+    4. **EXTRACT DESTINATION WALLET (PENTING)**:
+       - Look strictly for: "Bank Yang Dituju", "Bank Tujuan", "Ke Bank","Ke Rek" "Bank Penerima", "Ke Rekening", "Tujuan Transfer", "KEPADA", "Dana", "Go-Pay", "Shopee Pay".
        - Example: "Bank Yang Dituju : BANK MANDIRI" -> destination_wallet = "Mandiri".
     
-    6. EXTRACT DESTINATION WALLET TARIK TUNAI:
+    5. **EXTRACT DESTINATION WALLET TARIK TUNAI**:
        - Look strictly for: "Penarikan", "Tarik Tunai", "Ambil Cash".
        - Example: "Bank Yang Dituju : BANK MANDIRI" -> destination_wallet = "Mandiri".
 
-    7. GENERAL RULES:
-       - Ignore administrative fees (Biaya Admin) in the main amount unless it's the only amount. Use "Total Nominal" or "Jumlah Transfer".
+    6. **GENERAL RULES**:
+       - Ignore rounding (Pembulatan) unless it affects the total significantly.
        - If date missing, use today.
     `;
     

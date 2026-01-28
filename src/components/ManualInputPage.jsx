@@ -7,10 +7,10 @@ import { findMatchingBill, markBillAsPaid } from '../utils/billMatcher';
 import { 
   ArrowLeft, Keyboard, X, User, Building2, Send, Link, 
   Sparkles, Wallet, ArrowRight, PlusCircle, CheckCircle2,
-  ArrowDownLeft, Landmark 
+  ArrowDownLeft, Landmark, Receipt 
 } from 'lucide-react';
 
-// --- KOMPONEN DROPDOWN ULTRA COMPACT (PRECISION FIX) ---
+// --- KOMPONEN DROPDOWN ULTRA COMPACT ---
 const WalletSelect = ({ wallets, value, onChange, isNew, newName, placeholder, type, label }) => {
     const [isOpen, setIsOpen] = useState(false);
     const wrapperRef = useRef(null);
@@ -31,15 +31,12 @@ const WalletSelect = ({ wallets, value, onChange, isNew, newName, placeholder, t
 
     return (
         <div className={`relative w-full font-sans ${isOpen ? 'z-[100]' : 'z-10'}`} ref={wrapperRef}>
-            
-            {/* LABEL DI ATAS GARIS (PRECISION POSITIONING) */}
             <div className="absolute -top-[7px] left-2.5 z-20 px-1 bg-white leading-none">
                 <span className={`text-[8px] font-extrabold uppercase tracking-widest ${type === 'income' ? 'text-green-600' : type === 'transfer' ? 'text-blue-500' : 'text-slate-400'}`}>
                     {label}
                 </span>
             </div>
 
-            {/* TRIGGER TOMBOL */}
             <div 
                 onClick={() => setIsOpen(!isOpen)}
                 className={`relative flex items-center justify-between w-full px-2 rounded-lg border cursor-pointer transition-all bg-white h-9 ${isOpen ? 'border-indigo-500 ring-1 ring-indigo-100' : 'border-slate-300 hover:border-indigo-400'}`}
@@ -62,7 +59,6 @@ const WalletSelect = ({ wallets, value, onChange, isNew, newName, placeholder, t
                     </div>
                 </div>
 
-                {/* BADGE AUTO (SEKARANG DI DALAM KOTAK AGAR TIDAK BOCOR) */}
                 {isNew && (
                     <div className="absolute right-7 pointer-events-none">
                         <span className="text-[7px] font-bold text-indigo-600 bg-indigo-50 px-1 py-0.5 rounded border border-indigo-100 animate-pulse">
@@ -76,24 +72,29 @@ const WalletSelect = ({ wallets, value, onChange, isNew, newName, placeholder, t
                 </div>
             </div>
 
-            {/* LIST DROPDOWN */}
             {isOpen && (
                 <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl max-h-48 overflow-y-auto animate-in fade-in zoom-in-95 duration-100 scrollbar-hide p-1 z-[9999]">
-                    {wallets.map((w) => (
-                        <div 
-                            key={w.id} 
-                            onClick={() => { onChange(w.id); setIsOpen(false); }}
-                            className={`p-2 rounded-lg hover:bg-slate-50 cursor-pointer flex justify-between items-center mb-0.5 ${value === w.id ? 'bg-slate-100' : ''}`}
-                        >
-                            <div className="flex items-center gap-2 overflow-hidden">
-                                <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${value === w.id ? 'bg-indigo-500' : 'bg-slate-300'}`}></div>
-                                <span className={`text-[11px] truncate ${value === w.id ? 'font-bold text-indigo-900' : 'font-medium text-slate-700'}`}>{w.name}</span>
+                    {wallets.length > 0 ? (
+                        wallets.map((w) => (
+                            <div 
+                                key={w.id} 
+                                onClick={() => { onChange(w.id); setIsOpen(false); }}
+                                className={`p-2 rounded-lg hover:bg-slate-50 cursor-pointer flex justify-between items-center mb-0.5 ${value === w.id ? 'bg-slate-100' : ''}`}
+                            >
+                                <div className="flex items-center gap-2 overflow-hidden">
+                                    <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${value === w.id ? 'bg-indigo-500' : 'bg-slate-300'}`}></div>
+                                    <span className={`text-[11px] truncate ${value === w.id ? 'font-bold text-indigo-900' : 'font-medium text-slate-700'}`}>{w.name}</span>
+                                </div>
+                                <span className="text-[9px] text-slate-400 font-mono">
+                                    {new Intl.NumberFormat('id-ID', { compactDisplay: "short", notation: "compact", style: 'currency', currency: 'IDR' }).format(w.initial_balance || 0)}
+                                </span>
                             </div>
-                            <span className="text-[9px] text-slate-400 font-mono">
-                                {new Intl.NumberFormat('id-ID', { compactDisplay: "short", notation: "compact", style: 'currency', currency: 'IDR' }).format(w.initial_balance || 0)}
-                            </span>
+                        ))
+                    ) : (
+                        <div className="p-3 text-center text-[10px] text-slate-400">
+                            Tidak ada dompet {type === 'transfer' ? 'tujuan' : ''} di mode ini.
                         </div>
-                    ))}
+                    )}
                 </div>
             )}
         </div>
@@ -111,6 +112,8 @@ export default function ManualInputPage() {
 
   const [matchedBill, setMatchedBill] = useState(null); 
   const [linkToBill, setLinkToBill] = useState(true);
+  
+  // State Mode & Wallet
   const [activeMode, setActiveMode] = useState('PERSONAL');
   const [userWallets, setUserWallets] = useState([]); 
 
@@ -120,18 +123,38 @@ export default function ManualInputPage() {
   ];
   const [categoryList, setCategoryList] = useState(DEFAULT_CATEGORIES);
 
+  // --- 1. INISIALISASI TERPUSAT ---
   useEffect(() => {
-    if (user) {
-        fetchUserMode();
-        fetchUserBudgets();
-        fetchWallets();
-    }
-  }, [user]);
+    const initializeData = async () => {
+        if (!user) return;
 
-  const fetchUserMode = async () => {
-    const savedMode = localStorage.getItem('app_mode') || 'PERSONAL';
-    setActiveMode(savedMode);
-  };
+        try {
+            let currentMode = 'PERSONAL';
+            const savedMode = localStorage.getItem('app_mode');
+            
+            const { data } = await supabase.from('profiles').select('account_type').eq('id', user.id).single();
+            if (data) {
+                if (savedMode) {
+                    currentMode = savedMode;
+                } else if (['business', 'organization'].includes(data.account_type)) {
+                    currentMode = 'BUSINESS';
+                }
+            }
+            
+            setActiveMode(currentMode);
+
+            await Promise.all([
+                fetchWallets(currentMode),
+                fetchUserBudgets()
+            ]);
+
+        } catch (error) {
+            console.error("Init Error:", error);
+        }
+    };
+
+    initializeData();
+  }, [user]);
 
   const fetchUserBudgets = async () => {
       try {
@@ -146,9 +169,15 @@ export default function ManualInputPage() {
       } catch (error) { console.error(error); }
   };
 
-  const fetchWallets = async () => {
+  const fetchWallets = async (mode) => {
+      const targetMode = mode || activeMode;
       try {
-        const { data } = await supabase.from('wallets').select('id, name, initial_balance').eq('user_id', user.id).eq('allocation_type', activeMode);
+        const { data } = await supabase
+            .from('wallets')
+            .select('id, name, initial_balance')
+            .eq('user_id', user.id)
+            .eq('allocation_type', targetMode); 
+        
         setUserWallets(data || []);
       } catch (error) { console.error("Error fetching wallets:", error); }
   };
@@ -160,6 +189,7 @@ export default function ManualInputPage() {
 
     try {
       const aiResponseArray = await processVoiceInput(inputText, categoryList); 
+      
       const enrichedResult = aiResponseArray.map(aiItem => {
           
           const resolveWallet = (nameFromAI, transactionType, isSource) => {
@@ -171,7 +201,7 @@ export default function ManualInputPage() {
               }
               if (!nameFromAI && isSource && transactionType === 'expense') {
                   const cashWallet = userWallets.find(w => 
-                      ['tunai', 'cash', 'dompet'].includes(w.name.toLowerCase())
+                      ['tunai', 'cash', 'dompet', 'kas'].includes(w.name.toLowerCase())
                   );
                   if (cashWallet) return { ...cashWallet, isNew: false };
                   if (userWallets.length > 0) return { ...userWallets[0], isNew: false };
@@ -189,6 +219,13 @@ export default function ManualInputPage() {
               finalDest = null;
           }
 
+          let allocType = activeMode;
+          if (['business', 'organization'].includes(allocType.toLowerCase())) {
+              allocType = allocType; 
+          } else {
+              allocType = 'PERSONAL';
+          }
+
           return {
               ...aiItem,
               merchant: aiItem.merchant || (type === 'income' ? 'Pemasukan' : 'Transaksi'),
@@ -196,7 +233,9 @@ export default function ManualInputPage() {
               type: type,
               category: aiItem.category || 'Lainnya',
               total_amount: aiItem.total_amount || 0,
-              allocation_type: (activeMode === 'BUSINESS' || activeMode === 'ORGANIZATION') ? 'BUSINESS' : 'PERSONAL',
+              admin_fee: aiItem.admin_fee || 0, 
+              tax: aiItem.tax || 0,             
+              allocation_type: allocType, 
               sourceWallet: finalSource,
               destWallet: finalDest
           };
@@ -231,28 +270,25 @@ export default function ManualInputPage() {
       setAiResult(updatedList);
   };
 
-// --- SAVE LOGIC (FIXED: SPLIT TRANSFER & NO INVALID COLUMN) ---
   const handleSave = async () => {
     if (!user || !aiResult) return;
     setSaving(true);
     
-    // 1. MEMORY CACHE (Untuk Wallet Baru)
     let walletCache = {}; 
     userWallets.forEach(w => { walletCache[w.name.toLowerCase()] = w.id; });
 
     try {
-      // Helper: Get or Create Wallet ID
       const getOrCreateWalletId = async (wObj) => {
           if (!wObj) return null;
           const key = wObj.name.toLowerCase();
           if (walletCache[key]) return walletCache[key];
 
           let detectedType = 'ewallet';
-          if (['bca', 'mandiri', 'bri', 'bjb', 'bank'].some(k => key.includes(k))) detectedType = 'bank';
+          if (['bca', 'mandiri', 'bri', 'bjb', 'bank', 'btn', 'bni', 'bsi'].some(k => key.includes(k))) detectedType = 'bank';
 
           const { data, error } = await supabase.from('wallets').insert({
               user_id: user.id, name: wObj.name, type: detectedType, 
-              initial_balance: 0, allocation_type: activeMode
+              initial_balance: 0, allocation_type: activeMode 
           }).select().single();
           
           if (error) throw error;
@@ -260,80 +296,61 @@ export default function ManualInputPage() {
           return data.id;
       };
 
-      // 2. LOOP SEQUENTIAL
-      for (const txn of aiResult) {
-          const sourceId = await getOrCreateWalletId(txn.sourceWallet);
+      const insertTransaction = async (txnData, merchantName, amount, category, type) => {
+          const { data: headerData, error: headerError } = await supabase.from('transaction_headers').insert([{
+              user_id: user.id,
+              merchant: merchantName,
+              total_amount: amount,
+              type: type,
+              allocation_type: txnData.allocation_type,
+              category: category, 
+              date: txnData.date, 
+              wallet_id: await getOrCreateWalletId(txnData.sourceWallet), 
+              receipt_url: "AI Smart Input V10 (Split)", 
+              is_ai_generated: true,
+              is_journalized: false
+          }]).select().single();
 
-          // --- LOGIC: PECAH TRANSFER JADI 2 TRANSAKSI ---
+          if (headerError) throw headerError;
+
+          await supabase.from('transaction_items').insert([{
+             header_id: headerData.id, name: merchantName, price: amount, qty: 1
+          }]);
+      };
+
+      for (const txn of aiResult) {
+          const adminFee = Number(txn.admin_fee) || 0;
+          const tax = Number(txn.tax) || 0;
+          const mainAmount = Number(txn.total_amount) - adminFee - tax;
+
           if (txn.type === 'transfer') {
+              const sourceId = await getOrCreateWalletId(txn.sourceWallet);
               const destId = await getOrCreateWalletId(txn.destWallet);
 
-              // A. CATAT PENGELUARAN DI SUMBER (Keluar Duit)
-              // Note: Merchant kita isi dengan "Transfer ke [Nama Tujuan]" biar jelas di history
-              const { error: errOut } = await supabase.from('transaction_headers').insert([{
-                  user_id: user.id,
-                  merchant: `Transfer ke ${txn.destWallet?.name || 'Rekening'}`, 
-                  total_amount: txn.total_amount,
-                  type: 'expense', // Tipe jadi EXPENSE agar trigger jalan (Potong Saldo)
-                  allocation_type: txn.allocation_type,
-                  category: 'Mutasi Saldo', 
-                  date: txn.date,
-                  wallet_id: sourceId, // Dompet Sumber
-                  receipt_url: "Manual Input (Mutasi Out)",
-                  is_ai_generated: true,
-                  is_journalized: false
+              await supabase.from('transaction_headers').insert([{
+                  user_id: user.id, merchant: `Transfer ke ${txn.destWallet?.name || 'Rekening'}`, 
+                  total_amount: mainAmount, type: 'expense', allocation_type: txn.allocation_type, category: 'Mutasi Saldo', 
+                  date: txn.date, wallet_id: sourceId, receipt_url: "Manual Transfer Out", is_ai_generated: true, is_journalized: false
               }]);
 
-              if (errOut) throw errOut;
-
-              // B. CATAT PEMASUKAN DI TUJUAN (Terima Duit)
-              // Note: Merchant kita isi dengan "Terima dari [Nama Sumber]"
-              const { error: errIn } = await supabase.from('transaction_headers').insert([{
-                  user_id: user.id,
-                  merchant: `Terima dari ${txn.sourceWallet?.name || 'Rekening'}`, 
-                  total_amount: txn.total_amount,
-                  type: 'income', // Tipe jadi INCOME agar trigger jalan (Tambah Saldo)
-                  allocation_type: txn.allocation_type,
-                  category: 'Mutasi Saldo', 
-                  date: txn.date,
-                  wallet_id: destId, // Dompet Tujuan
-                  receipt_url: "Manual Input (Mutasi In)",
-                  is_ai_generated: true,
-                  is_journalized: false
+              await supabase.from('transaction_headers').insert([{
+                  user_id: user.id, merchant: `Terima dari ${txn.sourceWallet?.name || 'Rekening'}`, 
+                  total_amount: mainAmount, type: 'income', allocation_type: txn.allocation_type, category: 'Mutasi Saldo', 
+                  date: txn.date, wallet_id: destId, receipt_url: "Manual Transfer In", is_ai_generated: true, is_journalized: false
               }]);
-
-              if (errIn) throw errIn;
 
           } else {
-              // --- TRANSAKSI BIASA (INCOME / EXPENSE) ---
-              const { data: headerData, error: headerError } = await supabase
-                .from('transaction_headers')
-                .insert([{
-                  user_id: user.id,
-                  merchant: txn.merchant,
-                  total_amount: txn.total_amount,
-                  type: txn.type,
-                  allocation_type: txn.allocation_type,
-                  category: txn.category, 
-                  date: txn.date, 
-                  wallet_id: sourceId, 
-                  // Hapus destination_wallet_id karena bukan transfer lagi
-                  receipt_url: "AI Smart Input V9", 
-                  is_ai_generated: true,
-                  is_journalized: false
-                }])
-                .select()
-                .single();
+              if (mainAmount > 0) {
+                  await insertTransaction(txn, txn.merchant, mainAmount, txn.category, txn.type);
+              }
+          }
 
-              if (headerError) throw headerError;
+          if (adminFee > 0) {
+              await insertTransaction(txn, `Biaya Admin (${txn.merchant})`, adminFee, 'Biaya Admin', 'expense');
+          }
 
-              // Simpan Item Detail
-              await supabase.from('transaction_items').insert([{
-                 header_id: headerData.id,
-                 name: txn.merchant,
-                 price: txn.total_amount,
-                 qty: 1
-              }]);
+          if (tax > 0) {
+              await insertTransaction(txn, `Pajak (${txn.merchant})`, tax, 'Pajak', 'expense');
           }
       }
 
@@ -370,7 +387,7 @@ export default function ManualInputPage() {
                 <div className={`w-20 h-20 rounded-full flex items-center justify-center text-4xl shadow-xl mb-6 mt-8 ${btnColor} text-white`}><Keyboard size={36}/></div>
                 <p className="text-slate-500 text-sm mb-6 font-medium text-center max-w-[280px]">Vizofin akan merapikan transaksi Anda otomatis.</p>
                 <div className="w-full bg-white p-5 rounded-3xl border border-slate-200 shadow-sm mb-6 flex-1 min-h-[200px] flex flex-col relative focus-within:ring-2 focus-within:ring-blue-100 transition-all">
-                    <textarea className="w-full h-full bg-transparent outline-none text-slate-700 text-lg resize-none placeholder-slate-300 font-medium" placeholder='Ketik disini...' value={inputText} onChange={(e) => setInputText(e.target.value)}></textarea>
+                    <textarea className="w-full h-full bg-transparent outline-none text-slate-700 text-lg resize-none placeholder-slate-300 font-medium" placeholder='Ketik disini... (Contoh: Beli Kopi 20rb Pajak 2rb pake Gopay)' value={inputText} onChange={(e) => setInputText(e.target.value)}></textarea>
                     {inputText && <button onClick={() => setInputText('')} className="absolute top-2 right-2 p-1.5 bg-slate-100 rounded-full text-slate-400"><X size={14}/></button>}
                 </div>
                 <button onClick={handleProcess} disabled={!inputText.trim() || status === 'processing'} className={`w-full py-4 text-white rounded-2xl font-bold text-lg shadow-lg hover:brightness-110 active:scale-95 flex items-center justify-center gap-2 ${btnColor} disabled:bg-slate-300`}>
@@ -401,16 +418,53 @@ export default function ManualInputPage() {
                         <div className={`absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl ${txn.type === 'income' ? 'bg-green-500' : txn.type === 'transfer' ? 'bg-blue-500' : 'bg-red-500'}`}></div>
                         
                         <div className="flex justify-between items-start mb-2 pl-3">
-                            <div className="flex flex-col">
+                            <div className="flex flex-col w-full">
                                 <span className={`text-[10px] font-bold uppercase tracking-wider mb-0.5 ${txn.type === 'income' ? 'text-green-500' : txn.type === 'transfer' ? 'text-blue-500' : 'text-red-500'}`}>
                                     {txn.type === 'transfer' ? 'MUTASI' : txn.type === 'income' ? 'PEMASUKAN' : 'PENGELUARAN'}
                                 </span>
+                                
+                                {/* INPUT TOTAL BESAR */}
                                 <div className="flex items-center text-slate-800 font-extrabold text-xl">
                                     <span>Rp</span>
                                     <input type="number" value={txn.total_amount} onChange={(e) => updateTransaction(idx, 'total_amount', e.target.value)} className="bg-transparent outline-none w-32 ml-1"/>
                                 </div>
+
+                                {/* --- TAMPILAN BREAKDOWN (NEW & TIDY) --- */}
+                                {(txn.admin_fee > 0 || txn.tax > 0) && (
+                                    <div className="mt-3 bg-slate-50 rounded-xl p-2.5 border border-slate-100 space-y-1">
+                                        <div className="flex justify-between items-center text-xs text-slate-500">
+                                            <span>Harga Barang</span>
+                                            <span className="font-bold text-slate-700">
+                                                {new Intl.NumberFormat('id-ID').format(txn.total_amount - (txn.admin_fee||0) - (txn.tax||0))}
+                                            </span>
+                                        </div>
+                                        
+                                        {txn.admin_fee > 0 && (
+                                            <div className="flex justify-between items-center text-xs text-orange-600">
+                                                <div className="flex items-center gap-1"><span className="w-1 h-1 rounded-full bg-orange-500"></span>Admin</div>
+                                                <span className="font-bold">+{new Intl.NumberFormat('id-ID').format(txn.admin_fee)}</span>
+                                            </div>
+                                        )}
+
+                                        {txn.tax > 0 && (
+                                            <div className="flex justify-between items-center text-xs text-red-600">
+                                                <div className="flex items-center gap-1"><span className="w-1 h-1 rounded-full bg-red-500"></span>Pajak</div>
+                                                <span className="font-bold">+{new Intl.NumberFormat('id-ID').format(txn.tax)}</span>
+                                            </div>
+                                        )}
+                                        
+                                        <div className="border-t border-slate-200 my-1"></div>
+                                        
+                                        <div className="flex justify-between items-center text-xs">
+                                            <span className="font-bold text-slate-400">Total Bayar</span>
+                                            <span className="font-extrabold text-slate-800">
+                                                {new Intl.NumberFormat('id-ID').format(txn.total_amount)}
+                                            </span>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
-                            <input type="date" value={txn.date} onChange={(e) => updateTransaction(idx, 'date', e.target.value)} className="text-[10px] text-slate-400 bg-transparent outline-none text-right font-medium"/>
+                            <input type="date" value={txn.date} onChange={(e) => updateTransaction(idx, 'date', e.target.value)} className="text-[10px] text-slate-400 bg-transparent outline-none text-right font-medium shrink-0 ml-2"/>
                         </div>
 
                         <div className="pl-3 mb-3">

@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { findMatchingBill, markBillAsPaid } from '../utils/billMatcher';
 
-// --- KOMPONEN DROPDOWN COMPACT (SAMA DENGAN MANUAL INPUT) ---
+// --- KOMPONEN DROPDOWN COMPACT ---
 const WalletSelect = ({ wallets, value, onChange, isNew, newName, placeholder, type, label }) => {
     const [isOpen, setIsOpen] = useState(false);
     const wrapperRef = useRef(null);
@@ -70,24 +70,37 @@ export default function ScanSim() {
   const [saving, setSaving] = useState(false);
   const [matchedBill, setMatchedBill] = useState(null); 
   const [linkToBill, setLinkToBill] = useState(true);
+  
+  // State Mode & Wallet
   const [activeMode, setActiveMode] = useState('PERSONAL'); 
   const [userAccountType, setUserAccountType] = useState('personal'); 
   const [userWallets, setUserWallets] = useState([]); 
+  
   const [categoryList, setCategoryList] = useState(['Makanan', 'Transport', 'Belanja', 'Tagihan', 'Hiburan', 'Kesehatan', 'Lainnya', 'Gaji', 'Bonus', 'Saldo Awal']);
 
+  // --- 1. INITIAL LOAD (Terpusat) ---
   useEffect(() => {
     if (user) {
         fetchUserModeAndProfile();
         fetchUserBudgets();
-        fetchWallets();
     }
   }, [user]);
+
+  // --- 2. RELOAD WALLET SAAT MODE BERUBAH ---
+  useEffect(() => {
+    if (user) {
+        fetchWallets(); 
+    }
+  }, [user, activeMode]);
 
   const fetchUserModeAndProfile = async () => {
     const { data } = await supabase.from('profiles').select('account_type').eq('id', user.id).single();
     if (data) {
-        setUserAccountType(data.account_type); 
-        setActiveMode(localStorage.getItem('app_mode') || 'PERSONAL');
+        setUserAccountType(data.account_type);
+        const savedMode = localStorage.getItem('app_mode');
+        if (savedMode) setActiveMode(savedMode);
+        else if (['business', 'organization'].includes(data.account_type)) setActiveMode('BUSINESS');
+        else setActiveMode('PERSONAL');
     }
   };
 
@@ -101,9 +114,15 @@ export default function ScanSim() {
       } catch (error) { console.error(error); }
   };
 
+  // --- FETCH WALLET SESUAI MODE ---
   const fetchWallets = async () => {
       try {
-        const { data } = await supabase.from('wallets').select('id, name, initial_balance').eq('user_id', user.id).eq('allocation_type', activeMode);
+        const { data } = await supabase
+            .from('wallets')
+            .select('id, name, initial_balance')
+            .eq('user_id', user.id)
+            .eq('allocation_type', activeMode); 
+        
         setUserWallets(data || []);
       } catch (error) { console.error(error); }
   };
@@ -128,27 +147,15 @@ export default function ScanSim() {
     try {
       const result = await processImageInput(imageBase64, 'image/jpeg', categoryList);
       
-      // --- SMART WALLET MATCHER (FIXED) ---
       const resolveWallet = (nameFromAI) => {
           if (!nameFromAI) return null;
-          
-          // 1. Fungsi Bersih-bersih Nama
-          // Hapus kata 'bank', 'pt', spasi, dan ubah ke lowercase
           const cleanName = (str) => str.toLowerCase().replace(/\b(bank|pt|tbk)\b/g, '').trim();
-          
           const aiClean = cleanName(nameFromAI);
-
-          // 2. Cari yang COCOK
           const found = userWallets.find(w => {
               const wClean = cleanName(w.name);
-              // Cek apakah 'bjb' ada di 'bjb' (Exact) ATAU saling mengandung
               return wClean === aiClean || wClean.includes(aiClean) || aiClean.includes(wClean);
           });
-
-          // 3. Jika ketemu, pakai yang ada. Jika tidak, buat baru dengan nama rapi.
           if (found) return { ...found, isNew: false };
-          
-          // Format nama baru (Capitalize)
           const properName = nameFromAI.charAt(0).toUpperCase() + nameFromAI.slice(1);
           return { id: null, name: properName, isNew: true };
       };
@@ -157,11 +164,17 @@ export default function ScanSim() {
       let finalDest = resolveWallet(result.destination_wallet);
       let finalType = result.type || 'expense';
 
-      // --- SMART LOGIC ABANG ---
-      // Jika AI bilang transfer, tapi rekening tujuan TIDAK ada di data kita, jadikan EXPENSE
       if (finalType === 'transfer' && finalDest && finalDest.isNew) {
           finalType = 'expense';
           finalDest = null;
+      }
+
+      // Paksa Allocation Type sesuai Mode Aktif
+      let allocType = activeMode;
+      if (['business', 'organization'].includes(allocType.toLowerCase())) {
+          allocType = allocType;
+      } else {
+          allocType = 'PERSONAL';
       }
 
       setAiResult({
@@ -169,7 +182,7 @@ export default function ScanSim() {
           type: finalType,
           sourceWallet: finalSource,
           destWallet: finalDest,
-          allocation_type: activeMode === 'BUSINESS' ? 'BUSINESS' : 'PERSONAL'
+          allocation_type: allocType
       });
       setStatus('success');
 
@@ -191,13 +204,12 @@ export default function ScanSim() {
     userWallets.forEach(w => { walletCache[w.name.toLowerCase()] = w.id; });
 
     try {
-      // 1. GET / CREATE WALLET ID
       const getOrCreateWalletId = async (wObj) => {
           if (!wObj) return null;
           const key = wObj.name.toLowerCase();
           if (walletCache[key]) return walletCache[key];
           let detectedType = 'ewallet';
-          if (['bca', 'mandiri', 'bri', 'bjb', 'bank'].some(k => key.includes(k))) detectedType = 'bank';
+          if (['bca', 'mandiri', 'bri', 'bjb', 'bank', 'btn', 'bni', 'bsi'].some(k => key.includes(k))) detectedType = 'bank';
           const { data, error } = await supabase.from('wallets').insert({ user_id: user.id, name: wObj.name, type: detectedType, initial_balance: 0, allocation_type: activeMode }).select().single();
           if (error) throw error;
           walletCache[key] = data.id; 
@@ -206,67 +218,89 @@ export default function ScanSim() {
 
       const sourceId = await getOrCreateWalletId(aiResult.sourceWallet);
 
-      // --- LOGIC BARU: PECAH TRANSFER JADI 2 TRANSAKSI (DOUBLE ENTRY) ---
+      // --- HITUNG SPLIT ---
+      const adminFee = Number(aiResult.admin_fee) || 0;
+      const tax = Number(aiResult.tax) || 0;
+      const mainAmount = Number(aiResult.amount) - adminFee - tax; // Nominal Utama Murni
+
+      // --- FUNGSI HELPER INSERT ---
+      const insertTransaction = async (merchant, amount, type, category, walletId, items = []) => {
+          const { data, error } = await supabase.from('transaction_headers').insert([{
+              user_id: user.id,
+              merchant: merchant,
+              total_amount: amount,
+              type: type,
+              allocation_type: aiResult.allocation_type,
+              category: category,
+              date: aiResult.date || new Date().toISOString(),
+              wallet_id: walletId,
+              receipt_url: "Scan AI V14 (Split)",
+              is_ai_generated: true,
+              is_journalized: false
+          }]).select().single();
+          
+          if (error) throw error;
+
+          if (items.length > 0) {
+              await supabase.from('transaction_items').insert(
+                  items.map(i => ({ header_id: data.id, name: i.name, price: i.price, qty: 1 }))
+              );
+          }
+      };
+
       if (aiResult.type === 'transfer') {
           const destId = await getOrCreateWalletId(aiResult.destWallet);
 
-          // A. CATAT PENGELUARAN DI SUMBER (Keluar Duit)
-          const { error: errOut } = await supabase.from('transaction_headers').insert([{
-              user_id: user.id,
-              merchant: `Transfer ke ${aiResult.destWallet?.name || 'Rekening'}`, 
-              total_amount: aiResult.amount,
-              type: 'expense', // Tipe jadi EXPENSE agar trigger jalan (Potong Saldo)
-              allocation_type: aiResult.allocation_type,
-              category: 'Mutasi Saldo', // Kategori Khusus
-              date: aiResult.date || new Date().toISOString(),
-              wallet_id: sourceId, // Dompet Sumber
-              receipt_url: "Scan Input (Mutasi Out)",
-              is_ai_generated: true,
-              is_journalized: false
-          }]);
+          // 1. UTAMA OUT (Transfer)
+          await insertTransaction(
+              `Transfer ke ${aiResult.destWallet?.name || 'Rekening'}`, 
+              mainAmount, 
+              'expense', 'Mutasi Saldo', sourceId
+          );
 
-          if (errOut) throw errOut;
-
-          // B. CATAT PEMASUKAN DI TUJUAN (Terima Duit)
-          const { error: errIn } = await supabase.from('transaction_headers').insert([{
-              user_id: user.id,
-              merchant: `Terima dari ${aiResult.sourceWallet?.name || 'Rekening'}`, 
-              total_amount: aiResult.amount,
-              type: 'income', // Tipe jadi INCOME agar trigger jalan (Tambah Saldo)
-              allocation_type: aiResult.allocation_type,
-              category: 'Mutasi Saldo', 
-              date: aiResult.date || new Date().toISOString(),
-              wallet_id: destId, // Dompet Tujuan
-              receipt_url: "Scan Input (Mutasi In)",
-              is_ai_generated: true,
-              is_journalized: false
-          }]);
-
-          if (errIn) throw errIn;
+          // 2. UTAMA IN (Terima)
+          await insertTransaction(
+              `Terima dari ${aiResult.sourceWallet?.name || 'Rekening'}`, 
+              mainAmount, 
+              'income', 'Mutasi Saldo', destId
+          );
 
       } else {
-          // --- TRANSAKSI BIASA (INCOME / EXPENSE) ---
-          const { data: headerData, error: headerError } = await supabase.from('transaction_headers').insert([{
-            user_id: user.id, 
-            merchant: aiResult.merchant, 
-            total_amount: aiResult.amount,
-            type: aiResult.type, 
-            allocation_type: aiResult.allocation_type, 
-            category: aiResult.category, 
-            date: aiResult.date || new Date().toISOString(), 
-            wallet_id: sourceId, 
-            // Hapus destination_wallet_id
-            receipt_url: "Scan V13 (Smart Logic)", 
-            is_ai_generated: true, 
-            is_journalized: false
-          }]).select().single();
+          // 1. UTAMA (BIASA)
+          await insertTransaction(
+              aiResult.merchant, 
+              mainAmount, 
+              aiResult.type, 
+              aiResult.category, 
+              sourceId, 
+              aiResult.items // Sertakan items detail
+          );
+      }
 
-          if (headerError) throw headerError;
+      // --- LOGIC TAMBAHAN: SIMPAN BIAYA ADMIN/PAJAK TERPISAH ---
+      
+      // 2. Simpan Biaya Admin (Jika ada)
+      if (adminFee > 0) {
+          await insertTransaction(
+              `Biaya Admin (${aiResult.merchant})`,
+              adminFee,
+              'expense',
+              'Biaya Admin', // Kategori khusus
+              sourceId,
+              [{ name: 'Biaya Admin', price: adminFee }]
+          );
+      }
 
-          // Simpan Detail Item (Hanya jika bukan transfer/mutasi)
-          if (aiResult.items && aiResult.items.length > 0) {
-            await supabase.from('transaction_items').insert(aiResult.items.map(i => ({ header_id: headerData.id, name: i.name, price: i.price, qty: 1 })));
-          }
+      // 3. Simpan Pajak (Jika ada)
+      if (tax > 0) {
+          await insertTransaction(
+              `Pajak/Tax (${aiResult.merchant})`,
+              tax,
+              'expense',
+              'Pajak', // Kategori khusus
+              sourceId,
+              [{ name: 'Pajak', price: tax }]
+          );
       }
 
       if (matchedBill && linkToBill) await markBillAsPaid(matchedBill.id);
@@ -309,14 +343,27 @@ export default function ScanSim() {
         {status === 'preview' && (<div className="flex gap-3 w-full mt-6 max-w-sm animate-slide-up"><button onClick={() => setStatus('idle')} className="flex-1 py-3.5 bg-slate-800 text-slate-300 border border-slate-700 rounded-2xl font-bold flex items-center justify-center gap-2"><Repeat size={18}/> Ulang</button><button onClick={handleAnalyze} className={`flex-[2] py-3.5 text-white rounded-2xl font-bold shadow-lg flex items-center justify-center gap-2 ${activeMode === 'PERSONAL' ? 'bg-pink-600' : 'bg-blue-600'}`}>Analisa Struk</button></div>)}
       </div>
 
-      {/* RESULT MODAL (GEN Z CARD) */}
+      {/* RESULT MODAL */}
       {status === 'success' && aiResult && (
         <div className="absolute inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm animate-fade-in">
             <div className="bg-slate-50 w-full max-w-md h-[85vh] rounded-t-[2.5rem] flex flex-col shadow-2xl overflow-hidden animate-slide-up text-slate-900">
                 <div className="w-full flex justify-center pt-3 pb-1 cursor-grab"><div className="w-12 h-1.5 bg-slate-200 rounded-full"></div></div>
                 <div className="px-6 pb-4 border-b border-slate-100 bg-white shadow-sm">
                     <div className="flex justify-between items-start mb-2"><div><span className={`text-[10px] font-bold uppercase tracking-wider ${aiResult.type === 'transfer' ? 'text-blue-500' : 'text-red-500'}`}>{aiResult.type === 'transfer' ? 'MUTASI' : 'PENGELUARAN'}</span><h2 className="text-xl font-extrabold truncate max-w-[200px]">{aiResult.merchant}</h2></div><div className={`px-2 py-1 rounded-lg text-xs font-bold uppercase ${activeMode === 'PERSONAL' ? 'bg-pink-50 text-pink-600' : 'bg-blue-50 text-blue-600'}`}>Mode {activeMode === 'PERSONAL' ? 'Pribadi' : 'Bisnis'}</div></div>
-                    <div className="flex items-baseline gap-1"><span className="text-sm font-bold text-slate-400">Rp</span><span className="text-3xl font-extrabold">{aiResult.amount?.toLocaleString()}</span></div>
+                    
+                    {/* TAMPILKAN BREAKDOWN JIKA ADA ADMIN/PAJAK */}
+                    <div className="flex flex-col gap-1 mt-2">
+                        <div className="flex items-baseline gap-1"><span className="text-sm font-bold text-slate-400">Total</span><span className="text-3xl font-extrabold">{aiResult.amount?.toLocaleString()}</span></div>
+                        
+                        {(aiResult.admin_fee > 0 || aiResult.tax > 0) && (
+                            <div className="text-xs text-slate-500 bg-slate-100 p-2 rounded-lg flex flex-col gap-1 mt-1">
+                                <div className="flex justify-between"><span>Utama:</span> <span className="font-bold">{(aiResult.amount - (aiResult.admin_fee||0) - (aiResult.tax||0)).toLocaleString()}</span></div>
+                                {aiResult.admin_fee > 0 && <div className="flex justify-between text-orange-600"><span>+ Admin:</span> <span className="font-bold">{aiResult.admin_fee.toLocaleString()}</span></div>}
+                                {aiResult.tax > 0 && <div className="flex justify-between text-red-600"><span>+ Pajak:</span> <span className="font-bold">{aiResult.tax.toLocaleString()}</span></div>}
+                                <div className="text-[10px] text-slate-400 italic text-right mt-1">*Akan disimpan terpisah otomatis</div>
+                            </div>
+                        )}
+                    </div>
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -324,7 +371,6 @@ export default function ScanSim() {
                         <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-3 flex items-center gap-3"><div className="p-2 bg-white rounded-full text-indigo-600"><Link size={18}/></div><div className="flex-1 text-xs text-indigo-800 font-medium">Tandai lunas untuk <b>{matchedBill.name}</b>?</div><input type="checkbox" checked={linkToBill} onChange={(e) => setLinkToBill(e.target.checked)} className="w-5 h-5 text-indigo-600 rounded"/></div>
                     )}
 
-                    {/* CARD TRANSAKSI (SAMA DENGAN VOICE/MANUAL) */}
                     <div className="bg-white border border-slate-200 rounded-2xl p-4 overflow-visible relative">
                         <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-2xl ${aiResult.type === 'transfer' ? 'bg-blue-500' : 'bg-red-500'}`}></div>
                         <div className="flex flex-col gap-3 relative">

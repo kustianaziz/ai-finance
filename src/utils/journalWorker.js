@@ -1,13 +1,15 @@
 import { supabase } from '../supabaseClient';
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import Groq from "groq-sdk";
 import { getOrCreateAccount } from './accountingService'; 
 
-const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-const genAI = new GoogleGenerativeAI(API_KEY);
-const MODEL_NAME = "gemini-2.5-flash";
+// --- KONFIGURASI GROQ ---
+const API_KEY = import.meta.env.VITE_GROQ_API_KEY;
+const groq = new Groq({ apiKey: API_KEY, dangerouslyAllowBrowser: true });
 
-// --- FUNGSI 1: CARI KANDIDAT ---
-// (Bagian ini tidak berubah, tapi disertakan biar file lengkap)
+// Gunakan model Llama 3 70B (Versatile & Cerdas untuk Akuntansi)
+const MODEL_NAME = "llama-3.3-70b-versatile";
+
+// --- FUNGSI 1: CARI KANDIDAT TRANSAKSI ---
 export const fetchUnpostedTransactions = async (userId, startDate, endDate) => {
   const { data, error } = await supabase
     .from('transaction_headers')
@@ -22,19 +24,19 @@ export const fetchUnpostedTransactions = async (userId, startDate, endDate) => {
   return data || [];
 };
 
-// --- FUNGSI 2: PROSES SATU BIJI ---
+// --- FUNGSI 2: PROSES SATU TRANSAKSI ---
 export const processSingleTransaction = async (userId, trx) => {
   try {
-    // 1. Cek Gembok & Data
+    // 1. Cek Ulang Data di DB (Safety Check)
     const { data: freshTrx, error: fetchError } = await supabase
         .from('transaction_headers')
         .select('is_journalized, allocation_type') 
         .eq('id', trx.id)
         .single();
 
-    if (fetchError || !freshTrx) throw new Error("Transaksi hilang.");
+    if (fetchError || !freshTrx) throw new Error("Transaksi tidak ditemukan.");
     
-    // Kalau sudah diproses sebelumnya
+    // Kalau sudah diproses sebelumnya, skip
     if (freshTrx.is_journalized) {
         return { success: true, status: 'skipped', note: 'Data sudah diproses sebelumnya.' };
     }
@@ -42,19 +44,19 @@ export const processSingleTransaction = async (userId, trx) => {
     // 2. CEK TIPE ALOKASI
     const allocationType = trx.allocation_type || 'BUSINESS';
 
-    // --- LOGIC SKIP PRIBADI ---
+    // --- LOGIC SKIP PRIBADI (PERSONAL) ---
+    // Transaksi 'PERSONAL' tidak perlu masuk jurnal bisnis.
+    // Kita tandai is_journalized = true agar tidak muncul lagi di antrian.
     if (allocationType === 'PERSONAL') {
-        // Update DB jadi is_journalized = true (biar gak muncul di antrian lagi)
         await supabase
             .from('transaction_headers')
             .update({ is_journalized: true }) 
             .eq('id', trx.id);
 
-        // RETURN STATUS 'SKIPPED' (Ini kuncinya buat UI)
         return { success: true, status: 'skipped', note: 'Transaksi Pribadi (Tidak Dijurnal)' };
     }
 
-    // 2. AMBIL DAFTAR AKUN (Untuk Konteks AI)
+    // 3. AMBIL DAFTAR AKUN (COA)
     const { data: existingCOA } = await supabase
         .from('chart_of_accounts')
         .select('code, name, type')
@@ -62,18 +64,16 @@ export const processSingleTransaction = async (userId, trx) => {
 
     const coaListString = existingCOA.map(a => `- ${a.code} ${a.name} (${a.type})`).join('\n');
 
-    // 3. TANYA AI (Generate Jurnal & Deskripsi Rapih)
+    // 4. TANYA AI (Generate Jurnal & Deskripsi Rapih)
     const aiJournal = await askAIForJournal(trx, coaListString);
 
-    // 4. SIMPAN HEADER (Pakai Deskripsi dari AI)
+    // 5. SIMPAN HEADER JURNAL
     const { data: jHeader, error: jhError } = await supabase
         .from('journal_headers')
         .insert([{
             user_id: userId,
             transaction_date: trx.date,
-            // --- DISINI PERUBAHANNYA: ---
-            // Kita pakai deskripsi yang sudah dirapikan AI
-            description: aiJournal.description, 
+            description: aiJournal.description, // Deskripsi hasil olahan AI
             reference_no: `TRX-${trx.id.substring(0,8).toUpperCase()}`,
             is_posted: true
         }])
@@ -82,13 +82,13 @@ export const processSingleTransaction = async (userId, trx) => {
 
     if (jhError) throw jhError;
 
-    // 5. SIMPAN DETAILS
+    // 6. SIMPAN DETAILS (Debit & Credit)
     for (const entry of aiJournal.entries) {
         const accountId = await getOrCreateAccount(
             userId, 
             entry.account, 
             entry.type, 
-            entry.position,
+            entry.position, // 'debit' or 'credit'
             entry.code 
         );
 
@@ -100,13 +100,13 @@ export const processSingleTransaction = async (userId, trx) => {
         }]);
     }
 
-    // 6. UPDATE STATUS TRANSAKSI
+    // 7. UPDATE STATUS TRANSAKSI JADI SUDAH DIJURNAL
     await supabase
         .from('transaction_headers')
         .update({ is_journalized: true })
         .eq('id', trx.id);
 
-    return { success: true };
+    return { success: true, status: 'success' };
 
   } catch (err) {
     console.error(`Gagal ID ${trx.id}:`, err);
@@ -114,62 +114,83 @@ export const processSingleTransaction = async (userId, trx) => {
   }
 };
 
-// --- FUNGSI 3: PROMPT AI (FULL FIX) ---
+// --- FUNGSI 3: PROMPT AI (GROQ VERSION) ---
 const askAIForJournal = async (trx, coaListString) => {
-    const model = genAI.getGenerativeModel({ 
-        model: MODEL_NAME,
-        generationConfig: { responseMimeType: "application/json" }
-    });
-
-    // 1. SIAPKAN DATA (Ini yang tadi ketinggalan Bang!)
-    const itemsDesc = trx.transaction_items.map(i => `${i.name} (${i.price})`).join(', ');
+    // 1. SIAPKAN DATA CONTEXT
+    const itemsDesc = trx.transaction_items?.map(i => `${i.name} (${i.price})`).join(', ') || "Item";
     
     const dateObj = new Date(trx.date);
     const dateFormatted = `${String(dateObj.getDate()).padStart(2,'0')}-${String(dateObj.getMonth()+1).padStart(2,'0')}-${dateObj.getFullYear()}`;
     
     const allocationType = trx.allocation_type || 'BUSINESS'; // Default Business
 
-    // 2. SUSUN PROMPT
+    // 2. SUSUN PROMPT SAKTI
     const prompt = `
     Act as Senior Accountant for Indonesian UMKM.
 
-    TASK: Classify transaction into Journal Entries based on the provided Chart of Accounts.
+    TASK: Create a Journal Entry JSON based on the transaction data and available Chart of Accounts (COA).
 
-    CONTEXT:
-    - Merchant: ${trx.merchant}
+    TRANSACTION CONTEXT:
+    - Merchant/Desc: ${trx.merchant}
+    - Total Amount: ${trx.total_amount}
     - Date: ${dateFormatted}
-    - Items: ${itemsDesc}
+    - Items Detail: ${itemsDesc}
     - **ALLOCATION TYPE**: ${allocationType}
 
-    AVAILABLE ACCOUNTS:
+    AVAILABLE CHART OF ACCOUNTS:
     ${coaListString}
 
-    STRICT RULES BASED ON ALLOCATION TYPE:
-
-    1. **IF ALLOCATION TYPE = 'BUSINESS'** (Default):
-       - Map to the most relevant Expense/Asset Account (Header 1, 5, or 6).
-       - Example: Bensin -> '6-401 Beban Bensin'. Stok -> '1-105 Persediaan'.
+    ACCOUNTING RULES:
+    1. **IF ALLOCATION TYPE = 'BUSINESS'** (Standard Expense/Income):
+       - Map to the most specific Expense Account (Header 6) or Asset (Header 1).
+       - Credit is usually '1-101 Kas Tunai' or Bank.
 
     2. **IF ALLOCATION TYPE = 'PRIVE'** (Owner's Personal Draw):
-       - You MUST Debit '3-200 Prive / Penarikan Pemilik'.
-       - Do NOT use any 'Beban' accounts.
-       - Credit is '1-101 Kas Tunai' (Shop pays for owner's personal needs).
+       - DEBIT: '3-200 Prive / Penarikan Pemilik' (Equity reduction).
+       - CREDIT: '1-101 Kas Tunai' (Cash outflow).
+       - Do NOT use Expense accounts (Beban).
 
     3. **IF ALLOCATION TYPE = 'SALARY'** (Owner's Salary):
-       - You MUST Debit '6-101 Beban Gaji Staff Kantor' (Or equivalent Salary Expense).
-       - This treats the owner's withdrawal/spending as a Salary Expense for the business.
-       - Credit is '1-101 Kas Tunai'.
+       - DEBIT: '6-101 Beban Gaji' (Operating Expense).
+       - CREDIT: '1-101 Kas Tunai'.
+       - This treats the withdrawal as a business expense.
 
     4. **DESCRIPTION FORMAT**:
-       "${allocationType === 'BUSINESS' ? '' : '[' + allocationType + '] '}${trx.merchant} | ${dateFormatted} | Category (Indonesian)"
+       - Format: "[Category] Merchant Name - Brief Details"
+       - Example: "[Bensin] SPBU Pertamina - Isi Pertalite"
 
-    Output JSON Structure: 
-    { 
+    OUTPUT JSON SCHEMA (Strict):
+    {
       "description": "String",
-      "entries": [ { "position": "debit/credit", "code": "X-XXX", "account": "Name", "type": "Type", "amount": number } ] 
+      "entries": [
+        { "position": "debit", "code": "X-XXX", "account": "Account Name", "type": "Type", "amount": number },
+        { "position": "credit", "code": "X-XXX", "account": "Account Name", "type": "Type", "amount": number }
+      ]
     }
     `;
 
-    const result = await model.generateContent(prompt);
-    return JSON.parse(result.response.text());
+    try {
+        const chatCompletion = await groq.chat.completions.create({
+            messages: [{ role: "user", content: prompt }],
+            model: MODEL_NAME,
+            temperature: 0, // Wajib 0 agar output konsisten & patuh
+            response_format: { type: "json_object" }
+        });
+
+        const resultText = chatCompletion.choices[0]?.message?.content || "{}";
+        const cleanJson = resultText.replace(/```json|```/g, '').trim();
+        
+        return JSON.parse(cleanJson);
+
+    } catch (error) {
+        console.error("Groq Journal Error:", error);
+        // Fallback Manual jika AI Error
+        return {
+            description: `Manual: ${trx.merchant}`,
+            entries: [
+                { position: 'debit', code: '9-999', account: 'Uncategorized Expense', type: 'Expense', amount: trx.total_amount },
+                { position: 'credit', code: '1-101', account: 'Kas Tunai', type: 'Asset', amount: trx.total_amount }
+            ]
+        };
+    }
 };
