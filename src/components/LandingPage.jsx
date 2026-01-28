@@ -11,7 +11,8 @@ import {
 } from 'lucide-react';
 
 // --- ASSETS (Pastikan file ini ada di folder assets) ---
-import logoVizofin from '../assets/vizofinhorizontal.png'; 
+import logoVizofin from '../assets/vizofinhorizontal.png';
+import fapicon from '../assets/fapicon.png';
 // Favicon biasanya diatur di index.html, tapi kita bisa pakai logikanya nanti
 
 // --- DATA FITUR CORE ---
@@ -328,13 +329,16 @@ export default function LandingPage() {
   
   const [activeFeatureTab, setActiveFeatureTab] = useState('business');
 
-  // Set Title & Favicon
   useEffect(() => {
     document.title = "Vizofin - Smart Financial Companion";
-    // Untuk favicon, idealnya diatur di index.html, tapi ini untuk memastikan
     const link = document.querySelector("link[rel~='icon']");
     if (link) {
-        link.href = '../assets/fapicon.png';
+      link.href = fapicon;
+    } else {
+      const newLink = document.createElement('link');
+      newLink.rel = 'icon';
+      newLink.href = fapicon;
+      document.head.appendChild(newLink);
     }
   }, []);
 
