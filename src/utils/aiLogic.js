@@ -9,6 +9,31 @@ const groq = new Groq({ apiKey: API_KEY, dangerouslyAllowBrowser: true });
 // Gunakan model Llama 3 70B yang sangat cerdas untuk instruksi kompleks
 const MODEL_NAME = "meta-llama/llama-4-scout-17b-16e-instruct"; 
 
+// --- UPDATED LOGGER: TERIMA DATA TOKEN ---
+const logAIActivity = async (featureName, usageData, explicitUserId = null) => {
+    try {
+        let uid = explicitUserId;
+        if (!uid) {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (user) uid = user.id;
+        }
+
+        if (uid) {
+            // usageData format dari Groq: { prompt_tokens, completion_tokens, total_tokens }
+            await supabase.from('ai_logs').insert({
+                user_id: uid,
+                feature: featureName,
+                model: MODEL_NAME,
+                input_tokens: usageData?.prompt_tokens || 0,
+                output_tokens: usageData?.completion_tokens || 0,
+                total_tokens: usageData?.total_tokens || 0
+            });
+        }
+    } catch (err) {
+        console.error("Gagal log AI:", err);
+    }
+};
+
 // Helper untuk menyusun list kategori di Prompt
 const buildCategoryPrompt = (userCategories = []) => {
     // List Baku (Expense + Income)
@@ -90,6 +115,11 @@ export const processVoiceInput = async (text, userCategories = []) => {
       temperature: 0,
       response_format: { type: "json_object" }
     });
+
+    // --- CAPTURE TOKEN & LOG ---
+    const usage = chatCompletion.usage; 
+    logAIActivity('VOICE_MANUAL', usage);
+    // --------------------------
 
     const resultText = chatCompletion.choices[0]?.message?.content || "[]";
     // Bersihkan markdown block jika ada
@@ -194,6 +224,11 @@ export const processImageInput = async (fileBase64, mimeType, userCategories = [
       response_format: { type: "json_object" }
     });
 
+    // --- CAPTURE TOKEN & LOG ---
+    const usage = chatCompletion.usage;
+    logAIActivity('SCAN_RECEIPT', usage);
+    // --------------------------
+
     const resultText = chatCompletion.choices[0]?.message?.content || "{}";
     const cleanJson = resultText.replace(/```json|```/g, '').trim();
     return JSON.parse(cleanJson);
@@ -204,35 +239,58 @@ export const processImageInput = async (fileBase64, mimeType, userCategories = [
   }
 };
 
-// --- FUNGSI 3: GENERATE INSIGHT (SUPERCHARGED VIZO) ---
+// --- FUNGSI 3: GENERATE INSIGHT (ULTIMATE VIZO - PREDICTIVE, ANALYTIC & PSYCHOLOGY) ---
 export const generateFinancialInsights = async (transactions, userId) => {
-    // Note: Kita butuh userId untuk fetch data lain.
     if (!transactions || transactions.length === 0) {
         return ["Halo! Aku Vizo. Data transaksimu masih kosong nih. Yuk mulai catat pengeluaranmu hari ini! 📝"];
     }
 
     try {
-        // 1. HITUNG SALDO & ARUS KAS (Basic)
+        // 1. DATA PREPARATION (REALIZATION - KENYATAAN)
         let income = 0, expense = 0;
-        transactions.forEach(t => {
-            // Skip mutasi agar perhitungan kesehatan keuangan akurat
+        let expenseByCategory = {};
+        
+        const now = new Date();
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const daysPassed = now.getDate();
+        const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+        const daysLeft = daysInMonth - daysPassed;
+
+        const monthlyTransactions = transactions.filter(t => new Date(t.date) >= startOfMonth);
+
+        monthlyTransactions.forEach(t => {
+            const amt = Number(t.total_amount);
             if (t.category === 'Mutasi Saldo') return;
-            t.type === 'income' ? income += Number(t.total_amount) : expense += Number(t.total_amount);
+            
+            if (t.type === 'income') {
+                income += amt;
+            } else {
+                expense += amt;
+                // Grouping Pengeluaran untuk Analisa Kebocoran
+                const cat = t.category || 'Lainnya';
+                expenseByCategory[cat] = (expenseByCategory[cat] || 0) + amt;
+            }
         });
+
         const balance = income - expense;
-        const savingsRate = income > 0 ? ((income - expense) / income) * 100 : 0;
+        
+        // Hitung Burn Rate & Prediksi
+        const dailyBurnRate = daysPassed > 0 ? expense / daysPassed : 0;
+        const projectedExpense = expense + (dailyBurnRate * daysLeft);
+        const projectedBalance = income - projectedExpense;
+        
+        // Cari Top Pengeluaran
+        const topExpense = Object.entries(expenseByCategory)
+            .sort(([,a], [,b]) => b - a)
+            .slice(0, 3)
+            .map(([k,v]) => `${k} (${formatIDR(v)})`)
+            .join(", ");
 
-        // 2. FETCH DATA TAMBAHAN (Budget, Bills, Goals)
-        // Kita fetch parallel biar cepat
-        const today = new Date();
-        const currentMonthStr = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
-
+        // 2. FETCH PLANNING DATA (Budget, Bills, Goals)
+        const currentMonthStr = startOfMonth.toISOString().split('T')[0];
         const [budgetRes, billRes, goalRes] = await Promise.all([
-            // A. Budget Bulan Ini
             supabase.from('budgets').select('*').eq('user_id', userId).eq('month_period', currentMonthStr),
-            // B. Tagihan (Ambil semua utk difilter status bayarnya)
             supabase.from('bills').select('*').eq('user_id', userId),
-            // C. Goals (Semua impian)
             supabase.from('goals').select('*').eq('user_id', userId)
         ]);
 
@@ -240,108 +298,109 @@ export const generateFinancialInsights = async (transactions, userId) => {
         const bills = billRes.data || [];
         const goals = goalRes.data || [];
 
-        // 3. OLAH DATA UNTUK PROMPT AI
+        // 3. ANALISA DATA PERENCANAAN (PLANNING)
+        // Hitung Total Rencana (Tagihan Wajib + Budget Lifestyle)
+        const totalBills = bills.reduce((acc, curr) => acc + Number(curr.amount), 0);
+        const totalBudgetLimit = budgets.reduce((acc, curr) => acc + Number(curr.amount_limit), 0);
+        const totalPlannedOutflow = totalBills + totalBudgetLimit;
+        
+        // Rasio Perencanaan vs Income
+        let planningRatio = 0;
+        if (income > 0) planningRatio = Math.round((totalPlannedOutflow / income) * 100);
 
-        // A. Analisa Budget (Cari yg boros/hemat)
-        let budgetAlerts = [];
-        budgets.forEach(b => {
-            const pct = (b.current_usage / b.amount_limit) * 100;
-            if (pct >= 90) budgetAlerts.push(`${b.category} (KRITIS: ${Math.round(pct)}% terpakai)`);
-            else if (pct >= 75) budgetAlerts.push(`${b.category} (Warning: ${Math.round(pct)}%)`);
-            else if (pct < 10) budgetAlerts.push(`${b.category} (Jarang dipakai)`);
-        });
+        // Data Pendukung Lain
+        const hasGoals = goals.length > 0;
+        const goalsContext = goals.map(g => `${g.name} (Kurang: ${formatIDR(g.target_amount - g.current_amount)})`).join(", ");
+        
+        const unpaidBills = bills.filter(b => {
+            const lastPaid = b.last_paid_at ? new Date(b.last_paid_at) : null;
+            return !lastPaid || (lastPaid.getMonth() !== now.getMonth());
+        }).map(b => `${b.name} (${formatIDR(b.amount)})`).join(", ");
 
-        // B. Analisa Tagihan (Cari yg belum lunas & dekat)
-        const currentDay = today.getDate();
-        const upcomingBills = bills
-            .filter(b => {
-                // Cek apakah sudah lunas bulan ini
-                let isPaid = false;
-                if (b.last_paid_at) {
-                    const paidDate = new Date(b.last_paid_at);
-                    if (paidDate.getMonth() === today.getMonth() && paidDate.getFullYear() === today.getFullYear()) isPaid = true;
-                }
-                return !isPaid;
-            })
-            .map(b => ({ ...b, daysLeft: b.due_date - currentDay }))
-            .sort((a, b) => a.daysLeft - b.daysLeft) // Urutkan dari yg paling dekat/telat
-            .slice(0, 3) // Ambil top 3
-            .map(b => {
-                const status = b.daysLeft < 0 ? `TELAT ${Math.abs(b.daysLeft)} hari` : b.daysLeft === 0 ? "HARI INI" : `${b.daysLeft} hari lagi`;
-                return `${b.name} (${formatIDR(b.amount)} - ${status})`;
-            });
-
-        // C. Analisa Goals
-        const activeGoals = goals.map(g => {
-            const pct = Math.round((g.current_amount / g.target_amount) * 100);
-            return `${g.name}: Terkumpul ${pct}% (${formatIDR(g.current_amount)})`;
+        const budgetContext = budgets.map(b => {
+            const pct = Math.round((b.current_usage / b.amount_limit) * 100);
+            return `${b.category}: ${pct}%`;
         }).join(", ");
 
-        // 4. SUSUN PROMPT SAKTI
+        // 4. SUSUN PROMPT SAKTI (COMBINED)
         const prompt = `
-        Role: Kamu adalah "Vizo", asisten keuangan pribadi dari aplikasi Vizofin.
-        Tone: Santai, cerdas, suportif, "Gen Z professional", menggunakan Bahasa Indonesia yang luwes dan emoji yang relevan.
-        
-        DATA KEUANGAN USER (Bulan Ini):
-        - Pemasukan: ${formatIDR(income)}
-        - Pengeluaran: ${formatIDR(expense)}
-        - Cashflow Bersih: ${formatIDR(balance)}
-        - Saving Rate: ${savingsRate.toFixed(1)}% (Standar sehat minimal 20%)
-        
-        DATA PENDUKUNG:
-        - Budget Warning: ${budgetAlerts.length > 0 ? budgetAlerts.join(", ") : "Semua budget aman terkendali."}
-        - Tagihan Belum Lunas (Prioritas): ${upcomingBills.length > 0 ? upcomingBills.join(", ") : "Tidak ada tagihan mendesak."}
-        - Goals/Impian: ${activeGoals || "Belum ada goals."}
+        Role: Kamu adalah "Vizo", Konsultan Keuangan Pribadi yang cerdas, tajam, analitis, dan visioner.
+        Tone: Profesional santai, "menampar" jika perlu (wake-up call), motivasional, dan solutif. Gunakan Bahasa Indonesia.
 
-        TUGAS VIZO (Berikan 6-7 poin insight dalam format JSON Array string):
-        1. [Kesehatan Saldo]: Analisa apakah Cashflow user sehat (positif), standar, atau bahaya (negatif/minus). Puji jika saving rate bagus dan berikan saran positif untuk peningkatan.
-        2. [Saran Budget]: Komentari budget yang kritis (hampir habis) atau yang tidak terpakai. Beri saran taktis munculkan nama budget yang hampir habis terpakai atau tidak terpakai samasekali, beri saran juga untuk mulai menyusun budget jika belum ada data bulan ini.
-        3. [Reminder Tagihan]: WAJIB ingatkan tagihan yang jatuh tempo dekat/telat (sebutkan nama tagihannya).
-        4. [Motivasi Goals]: Hubungkan sisa saldo kemudian lihat budget rencana pengeluaran lalu bandingkan dengan goals user. Contoh: "Sisa saldomu sebutkan [angka sisa saldo] dengan rencana pengelauran [sebutkan rencana pengeluaran bulan ini]  sebutkan saran nya apakah cukup untuk nabung di target [Nama Goal] lho!".
-        5. [Reminder transaksi] : cek data transaksi reminder jika ada transaksi yang nominal nya jauh dari rata - rata pengeluaran biasa. informasikan rata - rata pengeluaran user tersebut berdasarkan data transaksi nya.
-        6. [Reminder pemasukan] : ingatkan user saat ini pemasukan nya dari apa saja, dan rata - rata berapa. berikan saran positive yang memotivasi.
-        7. [Saran Bisnis] : Berikan kesimpulan Akhir, dengan kondisi keuangan yang ada, kemudian melihat kondisi status tagihan, dan transaksi pengeluaran, berikan saran untuk meningkatkan pemasukan termasuk peluang bisnis yang bisa dilakukan.
-        8. [gambaran sisa saldo] : berikan prediksi sisa saldo dengan membandingkan, saldo awal, transaksi masuk, transaksi keluar dan budget pengeluaran bulan ini sebutkan prediksi sisa dana bulan ini 
-      
+        DATA REAL-TIME (Kenyataan Sekarang):
+        - Pemasukan: ${formatIDR(income)}
+        - Pengeluaran Berjalan: ${formatIDR(expense)}
+        - Sisa Saldo: ${formatIDR(balance)}
+        - Rata-rata Bakar Uang (Burn Rate): ${formatIDR(dailyBurnRate)} / hari
+        - Top Pengeluaran (Boros di): ${topExpense}
+        
+        FORECASTING (Prediksi Masa Depan Bulan Ini):
+        - Proyeksi Sisa Saldo Akhir Bulan: ${formatIDR(projectedBalance)}
+        - Status: ${projectedBalance < 0 ? "BAHAYA (DEFISIT)" : "AMAN (SURPLUS)"}
+
+        DATA PERENCANAAN (Mentalitas User):
+        - Total Tagihan Wajib: ${formatIDR(totalBills)}
+        - Total Budget Lifestyle: ${formatIDR(totalBudgetLimit)}
+        - TOTAL RENCANA KELUAR: ${formatIDR(totalPlannedOutflow)}
+        - Planning Ratio (Rencana/Income): ${planningRatio}%
+        
+        KONTEKS PENDUKUNG:
+        - Status Budget: ${budgetContext || "-"}
+        - Tagihan Belum Lunas: ${unpaidBills || "Lunas semua."}
+        - Punya Goals? ${hasGoals ? "YA" : "TIDAK"}
+        - Daftar Goals: ${goalsContext || "-"}
+
+        TUGAS VIZO (Berikan 8 Insight Tajam dalam format JSON Array):
+        
+        1. [Kesehatan Cashflow]: Evaluasi cashflow saat ini. Apakah positif/sehat? Berikan pujian atau peringatan keras jika burn rate terlalu tinggi dibanding pemasukan.
+        2. [Prediksi Bahaya]: Berdasarkan 'Proyeksi Sisa Saldo Akhir Bulan', berikan peringatan. Apakah user akan defisit (minus) atau surplus? Jika defisit, sarankan rem mendadak.
+        3. [Analisa Kebocoran]: Liat 'Top Pengeluaran'. Apakah ada kategori yang tidak wajar? Beri saran taktis untuk menguranginya (misal: kurangi jajan kopi).
+        4. [Strategi Goals]: Hubungkan 'Proyeksi Surplus' dengan 'Goals'. Contoh: "Kalau kamu hemat Rp 50rb/hari, impian [Goal Name] bisa tercapai lebih cepat!".
+        5. [Manajemen Utang]: Cek 'Tagihan Belum Lunas'. Bandingkan total tagihan dengan sisa saldo saat ini. Ingatkan prioritas bayar.
+        6. [Peluang Bisnis/Income]: Lihat pola pengeluaran. Jika banyak pengeluaran modal, sarankan optimasi. Jika cashflow surplus, sarankan investasi/bisnis sampingan.
+        7. [Saran Pamungkas]: Satu kalimat motivasi kuat yang merangkum tindakan apa yang harus dilakukan user HARI INI juga.
+        8. [ANALISA PSIKOLOGI BUDGET] (PENTING!):
+           - Bandingkan 'Total Rencana Keluar' (${formatIDR(totalPlannedOutflow)}) dengan 'Pemasukan' (${formatIDR(income)}).
+           - KASUS A: Jika Rencana mendekati/melebihi Income (>90%) DAN User PUNYA Goals:
+             "Gawat! Rencana pengeluaranmu (Tagihan+Budget) memakan ${planningRatio}% gaji! Kamu gak bakal bisa nabung buat [Sebutkan 1 Goal]. Saran: Kurangi budget lifestyle sekarang juga!"
+           - KASUS B: Jika Rencana mendekati/melebihi Income (>90%) DAN User TIDAK PUNYA Goals:
+             "Kamu aman tapi 'jalan di tempat'. Gajimu habis cuma buat bayar tagihan & gaya hidup (${planningRatio}%). Segera bikin 'Goals' dan pangkas budget biar punya masa depan!"
+           - KASUS C: Jika Rencana < 80% Income:
+             "Perencanaanmu mantap! Ada sisa ruang nafas ${100 - planningRatio}% dari gaji. Pastikan sisa ini masuk ke investasi ya, jangan dijajanin!"
 
         ATURAN OUTPUT:
-        - Output HARUS JSON Array of Strings murni.
-        - Kalimat harus langsung "to the point" dan enak dibaca.
-        - untuk movitasi goals minimal ingatkan 2 atau 3 goals inti nya lebih dari 1 goals jika memang ada data goals nya.
-        - Jangan kaku seperti robot.
-        - untuk monivasi bisnis / saran bisnis ini harus benar - benar dilihat dari kebiasaan user, melihat budget, melihat goals, melihat transaksi pengeluaran, melihat item pengeluaran, sehingga saran nya relevan dan kontekstual dengan user tersebut.
-
-        Contoh Output:
-        [
-            "Halo Juragan! Cashflow kamu bulan ini sehat banget, saving rate tembus 30%. Keren! 🚀",
-            "Eh hati-hati ya, budget 'Makanan' kamu udah 95% kepakai padahal baru pertengahan bulan. Masak sendiri dulu yuk? 🍳",
-            "Jangan lupa, tagihan Listrik jatuh tempo 2 hari lagi. Siapin dananya ya biar gak kena denda! ⚡",
-            "Sisa uangmu lumayan nih, kalau ditabung ke 'Beli MacBook' bisa makin cepat tercapai lho! 💻"
-        ]
+        - Output MURNI JSON Array of Strings.
+        - Kalimat Point 8 harus spesifik, tajam, dan sesuai kondisi (A/B/C).
+        - Gunakan emoji yang relevan.
         `;
 
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: "llama-3.3-70b-versatile", // Gunakan model terbaik untuk reasoning
+            model: "llama-3.3-70b-versatile",
             temperature: 0.6,
             response_format: { type: "json_object" }
         });
 
+        // --- CAPTURE TOKEN & LOG ---
+        const usage = chatCompletion.usage;
+        if (userId) logAIActivity('INSIGHT_VIZO', usage, userId);
+        // --------------------------
+
         const resultText = chatCompletion.choices[0]?.message?.content;
         const cleanJson = resultText.replace(/```json|```/g, '').trim();
-        
         const parsed = JSON.parse(cleanJson);
         
         if (Array.isArray(parsed)) return parsed;
-        // Handle jika AI membungkus dalam object key 'insights' atau 'data'
-        return parsed.insights || parsed.data || Object.values(parsed).find(v => Array.isArray(v)) || ["Keuanganmu aman, terus pantau ya! 👍"];
+        if (parsed.insights) return parsed.insights;
+        if (parsed.data) return parsed.data;
+        
+        return Object.values(parsed).find(v => Array.isArray(v)) || ["Keuanganmu aman, terus pantau ya! 👍"];
 
     } catch (error) {
         console.error("Vizo Insight Error:", error);
         return [
-            "Waduh, Vizo lagi pusing koneksi nih. 😵",
-            "Tapi sekilas kulihat, pastikan pengeluaranmu tidak lebih besar dari pemasukan ya!",
-            "Cek halaman Tagihan untuk memastikan tidak ada yang terlewat."
+            "Vizo sedang menghitung ulang strategi (Koneksi Error). 😵",
+            "Pastikan rencana pengeluaran (Budget+Tagihan) tidak lebih besar dari Pemasukan ya!"
         ];
     }
 };

@@ -1,21 +1,20 @@
 import React, { useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { App as CapacitorApp } from '@capacitor/app';
 import AuthProvider, { useAuth } from './context/AuthProvider';
 
-// --- IMPORT SEMUA HALAMAN ---
+// ... (IMPORT SEMUA HALAMAN TETAP SAMA) ...
 import LandingPage from './components/LandingPage';
 import LoginPage from './components/LoginPage';
 import RegisterPage from './components/RegisterPage';
 import Dashboard from './components/Dashboard';
-
 import AnalyticsPage from './components/AnalyticsPage';
 import TransactionsPage from './components/TransactionsPage';
 import VoiceSim from './components/VoiceSim';
 import ScanSim from './components/ScanSim';
 import UpgradePage from './components/UpgradePage';
 import AdminUsersPage from './components/AdminUsersPage';
-
+// ... (Import Akuntansi dll tetap sama) ...
 import AccountingPage from './components/AccountingPage';
 import JournalProcessPage from './components/JournalProcessPage';
 import ReportsMenuPage from './components/ReportsMenuPage';
@@ -28,36 +27,49 @@ import ManualInputPage from './components/ManualInputPage';
 import BudgetPage from './pages/BudgetPage';
 import GoalsPage from './pages/GoalsPage';
 import BillsPage from './pages/BillsPage';
-
-// Import Halaman Penampung (Biar link kosong gak error)
 import NotFoundPage from "./components/NotFoundPage"; 
 import EventsPage from './pages/EventsPage';
 import PrivateRoute from './components/PrivateRoute';
 import WalletPage from './pages/WalletPage';
 
-// --- KOMPONEN SATPAM (ROUTE GUARD) ---
+// --- CONFIG EMAIL ADMIN ---
+const ADMIN_EMAIL = 'kustianaziz6@gmail.com'; 
 
-// 1. PROTECTED ROUTE (Satpam Dashboard)
-// Hanya boleh masuk kalau SUDAH login. Kalau belum, tendang ke /login.
+// --- ROUTE GUARDS ---
+
 const ProtectedRoute = () => {
   const { user, loading } = useAuth();
-  if (loading) return null; // Tunggu loading selesai
+  if (loading) return null;
   return user ? <Outlet /> : <Navigate to="/login" replace />;
 };
 
-// 2. PUBLIC ROUTE (Satpam Login/Register)
-// Hanya boleh masuk kalau BELUM login. Kalau sudah login, tendang ke /dashboard.
-// (Ini yang bikin tombol Back browser gak balik ke login lagi)
 const PublicRoute = () => {
   const { user, loading } = useAuth();
   if (loading) return null;
   return user ? <Navigate to="/dashboard" replace /> : <Outlet />;
 };
 
+// --- NEW: SATPAM ADMIN KHUSUS ---
+const AdminRoute = () => {
+  const { user, loading } = useAuth();
+  
+  if (loading) return null; // Tunggu loading
+  
+  // 1. Cek Login
+  if (!user) return <Navigate to="/login" replace />;
+  
+  // 2. Cek Email (Hardcode Security)
+  if (user.email !== ADMIN_EMAIL) {
+      // Kalau bukan Kustian, tendang balik ke dashboard
+      return <Navigate to="/dashboard" replace />;
+  }
+
+  // Lolos Sensor
+  return <Outlet />;
+};
 
 // --- LAYOUTS ---
 
-// Layout 1: Full Screen (Landing Page)
 const FullLayout = () => {
   return (
     <div className="w-full min-h-screen bg-white">
@@ -66,20 +78,21 @@ const FullLayout = () => {
   );
 };
 
-// Layout 2: Mobile App View (Dashboard dkk)
 const AppLayout = () => {
+  const location = useLocation();
+  const isAdmin = location.pathname.startsWith('/admin');
+
   return (
-    <div className="max-w-[420px] mx-auto bg-white min-h-screen relative shadow-2xl overflow-hidden border-x border-gray-100 font-sans">
+    <div className={isAdmin 
+      ? "w-full min-h-screen bg-slate-50 font-sans" // Admin: Full Width
+      : "max-w-[420px] mx-auto bg-white min-h-screen relative shadow-2xl overflow-hidden border-x border-gray-100 font-sans" // User: Mobile
+    }>
       <Outlet />
     </div>
   );
 };
 
-
-// --- MAIN APP COMPONENT ---
 function App() {
-
-  // LOGIKA TOMBOL BACK ANDROID
   useEffect(() => {
     CapacitorApp.addListener('backButton', ({ canGoBack }) => {
       if (canGoBack) {
@@ -95,37 +108,29 @@ function App() {
       <BrowserRouter>
           <Routes>
             <Route path="/wallets" element={<PrivateRoute><WalletPage /></PrivateRoute>} />
-            {/* === GROUP 1: PUBLIC ONLY (Belum Login) === */}
-            {/* Pakai PublicRoute biar user login gak bisa akses ini lagi */}
+            
+            {/* PUBLIC */}
             <Route element={<PublicRoute />}>
                 <Route element={<FullLayout />}>
                     <Route path="/" element={<LandingPage />} />
                 </Route>
-                
                 <Route element={<AppLayout />}>
                     <Route path="/login" element={<LoginPage />} />
                     <Route path="/register" element={<RegisterPage />} />
                 </Route>
             </Route>
 
-
-            {/* === GROUP 2: PROTECTED ONLY (Sudah Login) === */}
-            {/* Pakai ProtectedRoute biar user luar gak bisa nyelonong masuk */}
+            {/* PROTECTED (USER BIASA) */}
             <Route element={<ProtectedRoute />}>
                 <Route element={<AppLayout />}>
                     <Route path="/dashboard" element={<Dashboard />} />
                     <Route path="/analytics" element={<AnalyticsPage />} />
                     <Route path="/transactions" element={<TransactionsPage />} />
-                    <Route path="/admin" element={<AdminUsersPage />} />
                     
-                    {/* Fitur AI */}
+                    {/* ... ROUTE LAINNYA TETAP SAMA ... */}
                     <Route path="/voice" element={<VoiceSim />} />
                     <Route path="/scan" element={<ScanSim />} />
-                    
-                    {/* Upgrade */}
                     <Route path="/upgrade" element={<UpgradePage />} />
-
-                    {/* Akuntansi & Laporan */}
                     <Route path="/accounting" element={<AccountingPage />} />
                     <Route path="/journal-process" element={<JournalProcessPage />} />
                     <Route path="/reports-menu" element={<ReportsMenuPage />} />
@@ -134,9 +139,6 @@ function App() {
                     <Route path="/report-cash-flow" element={<CashFlowPage />} />
                     <Route path="/report-journal" element={<JournalReportPage />} />
                     <Route path="/report-ledger" element={<LedgerPage />} />
-                    
-                    {/* RUTE SEMENTARA (Fitur yang belum ada filenya) */}
-                    {/* Biar tidak error 404 browser, kita arahkan ke halaman 'Coming Soon' */}
                     <Route path="/manual-input" element={<ManualInputPage />} />
                     <Route path="/invoice" element={<NotFoundPage />} />
                     <Route path="/stock" element={<NotFoundPage />} />
@@ -155,12 +157,18 @@ function App() {
                     <Route path="/invest" element={<NotFoundPage />} />
                     <Route path="/budget" element={<BudgetPage />} />
                     <Route path="/events" element={<EventsPage />} />
-
                 </Route>
             </Route>
 
-            {/* === CATCH ALL (404) === */}
-            {/* Kalau akses link ngawur, tampilkan Not Found Page, JANGAN Logout */}
+            {/* --- KHUSUS ADMIN (HANYA KUSTIAN) --- */}
+            <Route element={<AdminRoute />}>
+                <Route element={<AppLayout />}>
+                    {/* Daftar Halaman Admin di sini */}
+                    <Route path="/admin" element={<AdminUsersPage />} />
+                </Route>
+            </Route>
+
+            {/* 404 */}
             <Route path="*" element={<AppLayout><NotFoundPage /></AppLayout>} />
 
           </Routes>

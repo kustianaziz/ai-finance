@@ -177,6 +177,21 @@ const askAIForJournal = async (trx, coaListString) => {
             response_format: { type: "json_object" }
         });
 
+        // === [UPDATED LOGGING: SETELAH AI MENJAWAB] ===
+        const usage = chatCompletion.usage; // Ambil data pemakaian token
+        if (trx.user_id) {
+            // Insert log dengan data token yang akurat
+            supabase.from('ai_logs').insert({
+                user_id: trx.user_id,
+                feature: 'AUTO_JOURNAL',
+                model: MODEL_NAME,
+                input_tokens: usage?.prompt_tokens || 0,
+                output_tokens: usage?.completion_tokens || 0,
+                total_tokens: usage?.total_tokens || 0
+            }).then(() => { /* Silent success */ }); 
+        }
+        // ============================================
+
         const resultText = chatCompletion.choices[0]?.message?.content || "{}";
         const cleanJson = resultText.replace(/```json|```/g, '').trim();
         
