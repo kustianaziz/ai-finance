@@ -31,6 +31,7 @@ import NotFoundPage from "./components/NotFoundPage";
 import EventsPage from './pages/EventsPage';
 import PrivateRoute from './components/PrivateRoute';
 import WalletPage from './pages/WalletPage';
+import ProfilePage from './pages/ProfilePage';
 
 // --- CONFIG EMAIL ADMIN ---
 const ADMIN_EMAIL = 'kustianaziz6@gmail.com'; 
@@ -126,7 +127,7 @@ function App() {
                     <Route path="/dashboard" element={<Dashboard />} />
                     <Route path="/analytics" element={<AnalyticsPage />} />
                     <Route path="/transactions" element={<TransactionsPage />} />
-                    
+                    <Route path="/profile" element={<ProfilePage />} />
                     {/* ... ROUTE LAINNYA TETAP SAMA ... */}
                     <Route path="/voice" element={<VoiceSim />} />
                     <Route path="/scan" element={<ScanSim />} />

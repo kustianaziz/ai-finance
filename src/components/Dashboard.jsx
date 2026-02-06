@@ -3,13 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthProvider';
 import { supabase } from '../supabaseClient';
 import { generateFinancialInsights } from '../utils/aiLogic';
+import { calculateBudgetPeriod } from '../utils/budgetUtils'; 
 import { 
   Bell, LogOut, ArrowUpRight, ArrowDownLeft, X,
   ScanLine, Mic, BarChart3, Keyboard, 
-  Briefcase, Sparkles, ChevronRight, Crown, RefreshCcw,
+  Briefcase, Sparkles, ChevronRight, ChevronLeft, Crown, RefreshCcw,
   BookOpenCheck, ClipboardList, LayoutGrid, 
   Package, Receipt, Calculator, Users, ScrollText, HandCoins, 
-  PiggyBank, Target, Landmark, Calendar, TrendingUp, CheckCircle2, Rocket, Lightbulb,Wallet
+  PiggyBank, Target, Landmark, Calendar, TrendingUp, CheckCircle2, Rocket, Lightbulb, Wallet
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -23,12 +24,18 @@ export default function Dashboard() {
       return saved ? JSON.parse(saved) : null;
   });
   
+  // State Tanggal Dashboard (Time Travel)
+  const [dashboardDate, setDashboardDate] = useState(new Date());
+  const [periodInfo, setPeriodInfo] = useState({ startStr: '', endStr: '', periodLabel: '' });
+
   const [summary, setSummary] = useState({ 
     income: 0, 
     expense: 0, 
-    balance: 0,       // Saldo Akhir (Real-time)
-    openingBalance: 0 // Saldo Awal Bulan
-});
+    balance: 0,       
+    openingBalance: 0,
+    cashflow: 0 
+  });
+  
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(!profile); 
   const [billAlert, setBillAlert] = useState(0);
@@ -45,29 +52,39 @@ export default function Dashboard() {
   const [aiTips, setAiTips] = useState([]);
   const [loadingTips, setLoadingTips] = useState(false);
 
-  // 1. INIT DATA (Jalankan saat User / Mode berubah)
+  // 1. INIT DATA
   useEffect(() => {
     if (user) {
         loadDashboardData();
     }
-  }, [user, activeMode]); // <--- TAMBAHKAN activeMode SEBAGAI TRIGGER
+  }, [user, activeMode, dashboardDate]); 
 
   // 2. SAVE MODE CHANGES
   useEffect(() => {
     localStorage.setItem('app_mode', activeMode);
   }, [activeMode]);
 
-  // --- FUNGSI UTAMA (DIPERBAIKI: FILTER MODE) ---
-  // --- FUNGSI UTAMA (LOGIC SALDO & ARUS KAS FIXED) ---
+  // --- HELPER NAVIGASI BULAN ---
+  const changeMonth = (direction) => {
+      const newDate = new Date(dashboardDate);
+      newDate.setMonth(newDate.getMonth() + direction);
+      setDashboardDate(newDate);
+  };
+
+  const isCurrentMonth = () => {
+      const now = new Date();
+      return dashboardDate.getMonth() === now.getMonth() && dashboardDate.getFullYear() === now.getFullYear();
+  };
+
+  // --- FUNGSI UTAMA ---
   const loadDashboardData = async () => {
     try {
         if (!profile) setLoading(true); 
 
-        const now = new Date();
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-
-        // 1. CEK PROFIL
+        // 1. CEK PROFIL & AMBIL CYCLE DATE
         let currentUserProfile = profile; 
+        let cycleDate = 1; 
+
         if (!currentUserProfile) {
             const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single();
             if (data) {
@@ -79,25 +96,32 @@ export default function Dashboard() {
             }
         }
 
+        if (currentUserProfile) cycleDate = currentUserProfile.start_date_cycle || 1;
+
+        // --- HITUNG PERIODE AKTIF BERDASARKAN DASHBOARD DATE ---
+        const period = calculateBudgetPeriod(dashboardDate, cycleDate);
+        setPeriodInfo(period);
+
         // 2. FILTER MODE
-        // Filter untuk Transaksi (History/Summary)
         let allocationFilter = activeMode === 'PERSONAL' ? ['PERSONAL', 'PRIVE'] : ['BUSINESS', 'SALARY'];
-        // Filter untuk Wallet (Saldo Utama)
         let walletModeFilter = activeMode === 'PERSONAL' ? 'PERSONAL' : activeMode;
 
         // 3. FETCH DATA (PARALLEL)
         const [summaryRes, recentRes, billsRes, walletRes] = await Promise.all([
-            // A. Ringkasan Pemasukan/Pengeluaran (Bulan Ini)
+            // A. Ringkasan Pemasukan/Pengeluaran (SESUAI PERIODE YANG DIPILIH)
             supabase.from('transaction_headers')
-                .select('type, total_amount, category') // <--- PENTING: Tambah 'category' biar bisa filter Mutasi
+                .select('type, total_amount, category') 
                 .eq('user_id', user.id)
-                .gte('date', startOfMonth)
+                .gte('date', period.startStr)
+                .lte('date', period.endStr)
                 .in('allocation_type', allocationFilter),
 
-            // B. Transaksi Terakhir
+            // B. Transaksi Terakhir (SESUAI PERIODE)
             supabase.from('transaction_headers')
                 .select('*')
                 .eq('user_id', user.id)
+                .gte('date', period.startStr)
+                .lte('date', period.endStr)
                 .in('allocation_type', allocationFilter)
                 .order('date', { ascending: false })
                 .limit(5),
@@ -105,33 +129,33 @@ export default function Dashboard() {
             // C. Cek Tagihan
             supabase.from('bills').select('*').eq('user_id', user.id),
 
-            // D. SALDO UTAMA (Dari Tabel Wallets)
+            // D. SALDO UTAMA (Total Aset Real - Selalu Current)
             supabase.from('wallets')
                 .select('initial_balance')
                 .eq('user_id', user.id)
                 .eq('allocation_type', walletModeFilter)
         ]);
 
-        // --- HITUNG SALDO UTAMA (REAL ASSETS) ---
+        // --- HITUNG LOGIC ARUS KAS ---
         let totalBalanceFromWallets = 0;
         if (walletRes.data) {
             totalBalanceFromWallets = walletRes.data.reduce((acc, curr) => acc + Number(curr.initial_balance), 0);
         }
 
-        // --- HITUNG ARUS KAS BULANAN (INCOME vs EXPENSE) ---
         let inc = 0, exp = 0;
-        let totalFlowForOpeningBalance = 0;
+        
+        // Variabel helper untuk hitung Saldo Awal (Khusus Bulan Ini)
+        let totalFlowForOpeningBalance = 0; 
+
         if (summaryRes.data) {
             summaryRes.data.forEach(t => {
                 const amount = Number(t.total_amount);
                 
-                // 1. Hitung Net Flow untuk Saldo Awal (SEMUA TRANSAKSI DIHITUNG)
-                // Ini untuk membalikkan matematika saldo akhir -> saldo awal
+                // Hitung total flow (termasuk mutasi) jika ini bulan berjalan
                 if (t.type === 'income') totalFlowForOpeningBalance += amount;
                 else if (t.type === 'expense') totalFlowForOpeningBalance -= amount;
 
-                // 2. Hitung Laporan Income/Expense (FILTERED)
-                // Ini untuk tampilan grafik/teks "Pemasukan vs Pengeluaran" (Tanpa Mutasi)
+                // Hitung Income/Expense Dashboard (Exclude Mutasi)
                 if (t.category === 'Mutasi Saldo') return; 
 
                 if (t.type === 'income') inc += amount;
@@ -139,26 +163,21 @@ export default function Dashboard() {
             });
         }
 
+        // Logic Saldo
         const openingBalance = totalBalanceFromWallets - totalFlowForOpeningBalance;
+        const cashflow = inc - exp;
 
-        // Net Cash Flow bulan ini
-        //const netFlow = inc - exp;
-        // Saldo sebelum bulan ini dimulai
-        // const openingBalance = totalBalanceFromWallets - netFlow;   
-        
-        // UPDATE STATE
-        // Balance: Dari Wallet (Akurat)
-        // Income/Expense: Dari Transaksi Bulan Ini (Tanpa Mutasi)
         setSummary({ 
             income: inc, 
             expense: exp, 
-            balance: totalBalanceFromWallets, 
-            openingBalance: openingBalance 
+            balance: totalBalanceFromWallets, // Selalu saldo real dompet saat ini
+            openingBalance: openingBalance,
+            cashflow: cashflow 
         });
 
         if (recentRes.data) setTransactions(recentRes.data);
 
-        // --- PROCESS BILL ALERT ---
+        // Bill Alert
         if (billsRes.data) {
             const today = new Date();
             const currentDay = today.getDate();
@@ -216,40 +235,34 @@ export default function Dashboard() {
       return 'bg-indigo-600'; 
   };
 
-  // --- LOGIC AI TIPS (FILTERED BULAN INI + MODE) ---
   const handleAiAdvice = async () => {
     setShowNotif(!showNotif);
-    
     if (!showNotif && aiTips.length === 0) {
         setLoadingTips(true);
         try {
-           const now = new Date();
-           const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-
-           // Filter AI juga harus ikut Mode aktif agar insight-nya relevan
+           const { startStr, endStr } = periodInfo; 
            let allocationFilter = activeMode === 'PERSONAL' ? ['PERSONAL', 'PRIVE'] : ['BUSINESS', 'SALARY'];
 
            const { data: history } = await supabase.from('transaction_headers')
             .select('*')
             .eq('user_id', user.id)
-            .gte('date', startOfMonth)
+            .gte('date', startStr)
+            .lte('date', endStr)
             .in('allocation_type', allocationFilter) 
             .order('date', { ascending: false });
            
            const insights = await generateFinancialInsights(history || [], user.id);
-           setAiTips(insights.length ? insights : ["Belum cukup data bulan ini untuk mode ini. Yuk catat transaksi! 📝"]);
+           setAiTips(insights.length ? insights : ["Belum cukup data periode ini untuk dianalisa. Yuk catat transaksi! 📝"]);
         } catch (e) { 
-            console.error("Vizo Pusing:", e);
-            setAiTips(["Vizo sedang sibuk. Coba lagi nanti! 😴"]); 
+           console.error("Vizo Pusing:", e);
+           setAiTips(["Vizo sedang sibuk. Coba lagi nanti! 😴"]); 
         } finally { 
-            setLoadingTips(false); 
+           setLoadingTips(false); 
         }
     }
   };
 
   const formatIDR = (num) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(num);
-  
-  // Format Tanggal Singkat (contoh: 20 Jan)
   const formatDateShort = (dateString) => {
       if (!dateString) return '';
       const date = new Date(dateString);
@@ -257,23 +270,12 @@ export default function Dashboard() {
   };
 
   const MenuCard = ({ icon: Icon, label, onClick, colorClass, isLocked = false, isPro = false, badgeCount = 0 }) => (
-    <button 
-      onClick={isLocked ? () => setShowUpsell(true) : onClick} 
-      className={`relative p-3 rounded-2xl bg-white border border-slate-100 shadow-sm flex flex-col items-center justify-center gap-2 transition active:scale-95 hover:shadow-md hover:border-indigo-100 h-[85px] w-full ${isLocked ? 'opacity-60 grayscale' : ''}`}
-    >
-      {badgeCount > 0 && (
-          <div className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full border-2 border-white shadow-sm z-10 animate-bounce">
-              {badgeCount}
-          </div>
-      )}
-
-      {isPro && (
-          <div className={`absolute top-1 right-1 ${isLocked ? 'text-amber-500' : 'text-blue-500'}`}>
-              <Crown size={12} fill="currentColor"/>
-          </div>
-      )}
+    <button onClick={isLocked ? () => setShowUpsell(true) : onClick} className={`relative p-3 rounded-2xl bg-white border border-slate-100 shadow-sm flex flex-col items-center justify-center gap-2 transition active:scale-95 hover:shadow-md hover:border-indigo-100 h-[85px] w-full ${isLocked ? 'opacity-60 grayscale' : ''}`}>
+      {badgeCount > 0 && (<div className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full border-2 border-white shadow-sm z-10 animate-bounce">{badgeCount}</div>)}
+      {isPro && (<div className={`absolute top-1 right-1 ${isLocked ? 'text-amber-500' : 'text-blue-500'}`}><Crown size={12} fill="currentColor"/></div>)}
       <div className={`p-2 rounded-xl ${colorClass} bg-opacity-10`}>
-         <Icon size={20} className={colorClass.replace('bg-', 'text-')} />
+        {/* CHECK IF ICON EXISTS BEFORE RENDERING TO PREVENT CRASH */}
+        {Icon ? <Icon size={20} className={colorClass.replace('bg-', 'text-')} /> : <div className="w-5 h-5"/>}
       </div>
       <span className="text-[11px] font-bold text-slate-700 text-center leading-tight">{label}</span>
     </button>
@@ -286,8 +288,8 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-[#F8FAFC] font-sans pb-28 relative">
       
-      {/* HEADER */}
-      <div className={`${getThemeColor()} pb-20 pt-8 px-6 rounded-b-[2.5rem] relative overflow-hidden transition-colors duration-500`}>
+      {/* HEADER (WARNA) */}
+      <div className={`${getThemeColor()} pb-24 pt-8 px-6 rounded-b-[2.5rem] relative overflow-hidden transition-colors duration-500`}>
          <div className="absolute top-0 left-0 w-full h-full bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10"></div>
          
          <div className="relative z-10 flex justify-between items-start mb-6">
@@ -297,129 +299,139 @@ export default function Dashboard() {
                    profile?.account_type === 'organization' ? <Users className="text-white" size={24}/> : 
                    <Sparkles className="text-white" size={24}/>}
                </div>
-               
-               <div>
-                  <div onClick={toggleMode} className="flex items-center gap-1.5 cursor-pointer group">
+               {/* WRAPPER BARU: KLIK UNTUK KE PROFILE */}
+               <div 
+                   onClick={() => navigate('/profile')} 
+                   className="cursor-pointer hover:bg-white/10 rounded-lg p-1 -ml-1 transition pr-3"
+               >
+                  <div 
+                      onClick={(e) => { e.stopPropagation(); toggleMode(); }} // Stop propagation biar toggle mode gak pindah halaman
+                      className="flex items-center gap-1.5 cursor-pointer group w-fit"
+                  >
                       <p className="text-white/80 text-xs font-medium mb-0.5 group-hover:text-white transition">
-                        {activeMode === 'BUSINESS' ? 'Mode Bisnis' : 
-                         activeMode === 'ORGANIZATION' ? 'Mode Organisasi' : 'Mode Pribadi'}
+                        {activeMode === 'BUSINESS' ? 'Mode Bisnis' : activeMode === 'ORGANIZATION' ? 'Mode Organisasi' : 'Mode Pribadi'}
                       </p>
-                      {!isPersonalUser && (
-                          <RefreshCcw size={10} className="text-white/70 group-hover:text-white group-hover:rotate-180 transition-transform duration-500"/>
-                      )}
+                      {!isPersonalUser && (<RefreshCcw size={10} className="text-white/70 group-hover:text-white group-hover:rotate-180 transition-transform duration-500"/>)}
                   </div>
-                  <h1 className="text-lg font-bold text-white leading-tight truncate max-w-[200px]">
-                     {activeMode === 'PERSONAL' ? profile?.full_name : (profile?.entity_name || profile?.full_name)}
-                  </h1>
+                  
+                  <div className="flex items-center gap-2">
+                      <h1 className="text-lg font-bold text-white leading-tight truncate max-w-[180px]">
+                         {activeMode === 'PERSONAL' ? profile?.full_name : (profile?.entity_name || profile?.full_name)}
+                      </h1>
+                      <ChevronRight size={16} className="text-white/50"/>
+                  </div>
                </div>
             </div>
-            
             <div className="flex gap-3">
                <button onClick={handleAiAdvice} className="relative p-2 bg-white/10 rounded-full text-white hover:bg-white/20 transition">
                   <Bell size={20} />
                   {!showNotif && <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-rose-500 rounded-full border-2 border-white animate-pulse"></span>}
                </button>
-               <button onClick={handleLogout} className="p-2 bg-white/10 rounded-full text-red-200 hover:bg-red-500/20 hover:text-red-100 transition">
-                  <LogOut size={20} />
-               </button>
+               <button onClick={handleLogout} className="p-2 bg-white/10 rounded-full text-red-200 hover:bg-red-500/20 hover:text-red-100 transition"><LogOut size={20} /></button>
             </div>
          </div>
 
-         {/* AREA SALDO (KLIK UNTUK KE WALLETS) */}
-         <motion.div 
-            className="text-center text-white relative z-10 mt-2 cursor-pointer group"
-            whileTap={{ scale: 0.95 }}
-            onClick={() => navigate('/wallets')}
-         >
+         {/* TOTAL SALDO */}
+         <motion.div className="text-center text-white relative z-10 mt-2 cursor-pointer group" whileTap={{ scale: 0.95 }} onClick={() => navigate('/wallets')}>
             <p className="text-white/80 text-sm mb-1 flex items-center justify-center gap-1.5 transition-colors group-hover:text-white">
                 <Wallet size={14} className="opacity-70 group-hover:opacity-100"/>
-                {activeMode === 'PERSONAL' ? 'Total Saldo Dompet' : 'Kas Operasional'}
+                {activeMode === 'PERSONAL' ? 'Total Aset Dompet' : 'Kas Operasional'}
                 <ChevronRight size={12} className="opacity-50 group-hover:opacity-100 group-hover:translate-x-1 transition-transform"/>
             </p>
-            
             <h2 className="text-4xl font-extrabold tracking-tight mb-2 min-h-[40px]">
-               {loading && summary.balance === 0 ? (
-                   <span className="animate-pulse opacity-50">...</span> 
-               ) : formatIDR(summary.balance)}
+               {loading && summary.balance === 0 ? (<span className="animate-pulse opacity-50">...</span>) : formatIDR(summary.balance)}
             </h2>
-            
-            {/* BADGE UPGRADE (STOP PROPAGATION AGAR TIDAK KE WALLETS SAAT DIKLIK) */}
             <div className="flex flex-col items-center gap-2">
-                {profile?.account_type === 'personal' && (
-                   <div 
-                        onClick={(e) => { e.stopPropagation(); setShowUpsell(true); }} 
-                        className="inline-flex items-center gap-1 bg-white/20 px-3 py-1 rounded-full text-[10px] font-bold border border-white/30 hover:bg-white/30 transition"
-                   >
-                      <span>🚀 Upgrade Fitur</span>
-                      <ChevronRight size={12}/>
-                   </div>
-                )}
-                
-                {profile?.account_type === 'personal_pro' && (
-                   <div className="inline-flex items-center gap-1 bg-amber-400/20 px-3 py-1 rounded-full text-[10px] font-bold border border-amber-400/50 text-amber-100">
-                      <Crown size={12} fill="currentColor" className="text-amber-300"/>
-                      <span>Personal Pro</span>
-                   </div>
-                )}
-
-                {!isPersonalUser && activeMode === 'PERSONAL' && (
-                   <div 
-                        onClick={(e) => { e.stopPropagation(); toggleMode(); }} 
-                        className="inline-flex items-center gap-1 bg-white/20 px-3 py-1 rounded-full text-[10px] font-bold border border-white/30 hover:bg-white/30 transition"
-                   >
-                      {profile?.account_type === 'organization' ? <Users size={12}/> : <Briefcase size={12}/>}
-                      <span>Kembali ke {profile?.account_type === 'organization' ? 'Organisasi' : 'Bisnis'}</span>
-                   </div>
-                )}
+                {profile?.account_type === 'personal' && (<div onClick={(e) => { e.stopPropagation(); setShowUpsell(true); }} className="inline-flex items-center gap-1 bg-white/20 px-3 py-1 rounded-full text-[10px] font-bold border border-white/30 hover:bg-white/30 transition"><span>🚀 Upgrade Fitur</span><ChevronRight size={12}/></div>)}
+                {profile?.account_type === 'personal_pro' && (<div className="inline-flex items-center gap-1 bg-amber-400/20 px-3 py-1 rounded-full text-[10px] font-bold border border-amber-400/50 text-amber-100"><Crown size={12} fill="currentColor" className="text-amber-300"/><span>Personal Pro</span></div>)}
+                {!isPersonalUser && activeMode === 'PERSONAL' && (<div onClick={(e) => { e.stopPropagation(); toggleMode(); }} className="inline-flex items-center gap-1 bg-white/20 px-3 py-1 rounded-full text-[10px] font-bold border border-white/30 hover:bg-white/30 transition">{profile?.account_type === 'organization' ? <Users size={12}/> : <Briefcase size={12}/>}<span>Kembali ke {profile?.account_type === 'organization' ? 'Organisasi' : 'Bisnis'}</span></div>)}
             </div>
          </motion.div>
       </div>
 
-      {/* CARD SUMMARY (OPTIMIZED FLOW) */}
-      <div className="px-6 -mt-12 relative z-20">
-         <div className="bg-white p-5 rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100 flex flex-col gap-4">
+      {/* CARD SUMMARY */}
+      <div className="px-4 -mt-20 relative z-20">
+         <div className="bg-white p-4 rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100 flex flex-col gap-2">
             
-            {/* Baris 1: Saldo Awal & Akhir */}
-            <div className="flex justify-between items-center border-b border-slate-50 pb-3">
-                <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Saldo Awal Bulan</span>
-                    <span className="text-sm font-bold text-slate-600">{formatIDR(summary.openingBalance)}</span>
+            {/* NAVIGATOR BULAN & INFO PERIODE */}
+            <div className="flex items-center justify-between border-b border-slate-50 pb-4">
+                <button onClick={() => changeMonth(-1)} className="p-2 bg-slate-50 rounded-full text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition"><ChevronLeft size={18}/></button>
+                <div className="text-center">
+                    <span className="font-bold text-slate-800 block text-base leading-none">
+                        {dashboardDate.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}
+                    </span>
+                    <span className="text-[10px] text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full mt-1.5 inline-block font-medium">
+                        {periodInfo.periodLabel}
+                    </span>
                 </div>
-                <div className="text-right flex flex-col">
-                    <span className="text-[10px] font-bold text-indigo-500 uppercase tracking-wider">Saldo Akhir</span>
-                    <span className="text-lg font-extrabold text-slate-800">{formatIDR(summary.balance)}</span>
-                </div>
+                <button onClick={() => changeMonth(1)} className="p-2 bg-slate-50 rounded-full text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition"><ChevronRight size={18}/></button>
             </div>
 
-            {/* Baris 2: Income & Expense (Arus Kas Bulan Ini) */}
+            {/* INFO SALDO PERIODE INI */}
+            <div className="flex justify-between items-center bg-slate-50 rounded-xl p-3">
+                <div className="flex flex-col">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        {isCurrentMonth() ? 'Saldo Awal' : 'Surplus / Defisit'}
+                    </span>
+                    <span className={`text-sm font-bold ${!isCurrentMonth() && summary.cashflow < 0 ? 'text-red-600' : 'text-slate-600'}`}>
+                        {isCurrentMonth() ? formatIDR(summary.openingBalance) : formatIDR(summary.cashflow)}
+                    </span>
+                </div>
+                {isCurrentMonth() && (
+                    <div className="text-right flex flex-col">
+                        <span className="text-[10px] font-bold text-indigo-500 uppercase tracking-wider">Saldo Akhir</span>
+                        <span className="text-base font-bold text-indigo-700">{formatIDR(summary.openingBalance + summary.income - summary.expense)}</span>
+                    </div>
+                )}
+            </div>
+
+            {/* Income & Expense (CLICKABLE) */}
             <div className="flex justify-between items-center">
-               <div className="flex items-center gap-3">
-                   <div className="w-8 h-8 rounded-full bg-green-50 flex items-center justify-center text-green-600">
+               
+               {/* TOMBOL PEMASUKAN */}
+               <div 
+                   onClick={() => navigate('/transactions', { 
+                       state: { 
+                           filterType: 'income', 
+                           dateRange: periodInfo // Kirim periode aktif dashboard
+                       } 
+                   })}
+                   className="flex items-center gap-3 cursor-pointer group p-2 -ml-2 rounded-xl hover:bg-slate-50 transition"
+               >
+                   <div className="w-8 h-8 rounded-full bg-green-50 flex items-center justify-center text-green-600 group-hover:scale-110 transition-transform">
                        <ArrowDownLeft size={16}/>
                    </div>
                    <div className="flex flex-col">
-                       <span className="text-[10px] text-slate-400 font-medium">Pemasukan</span>
+                       <span className="text-[10px] text-slate-400 font-medium group-hover:text-green-600 transition-colors">Pemasukan</span>
                        <span className="text-sm font-bold text-slate-800">{formatIDR(summary.income)}</span>
                    </div>
                </div>
                
                <div className="h-8 w-px bg-slate-100"></div>
 
-               <div className="flex items-center gap-3 justify-end">
+               {/* TOMBOL PENGELUARAN */}
+               <div 
+                   onClick={() => navigate('/transactions', { 
+                       state: { 
+                           filterType: 'expense', 
+                           dateRange: periodInfo 
+                       } 
+                   })}
+                   className="flex items-center gap-3 justify-end cursor-pointer group p-2 -mr-2 rounded-xl hover:bg-slate-50 transition"
+               >
                    <div className="flex flex-col items-end">
-                       <span className="text-[10px] text-slate-400 font-medium">Pengeluaran</span>
+                       <span className="text-[10px] text-slate-400 font-medium group-hover:text-red-600 transition-colors">Pengeluaran</span>
                        <span className="text-sm font-bold text-slate-800">{formatIDR(summary.expense)}</span>
                    </div>
-                   <div className="w-8 h-8 rounded-full bg-red-50 flex items-center justify-center text-red-600">
+                   <div className="w-8 h-8 rounded-full bg-red-50 flex items-center justify-center text-red-600 group-hover:scale-110 transition-transform">
                        <ArrowUpRight size={16}/>
                    </div>
                </div>
             </div>
-
          </div>
       </div>
 
-      {/* ZONA INTI */}
+      {/* ZONA INTI (AKSI CEPAT) */}
       <div className="px-6 mt-8">
          <h3 className="text-slate-900 font-bold text-base mb-3">Aksi Cepat</h3>
          <div className="grid grid-cols-4 gap-3">
