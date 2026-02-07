@@ -668,6 +668,28 @@ export default function Dashboard() {
                   {/* --- MODE BISNIS --- */}
                   {activeMode === 'BUSINESS' && (
                       <>
+                        <MenuCard 
+                            icon={ScanLine} 
+                            label="Kasir" 
+                            colorClass="bg-blue-50 text-blue-600"
+                            onClick={() => {
+                                // Trik: Bikin Session Palsu agar POSPage mengira ini adalah Karyawan
+                                const ownerSession = {
+                                    storeId: user.id, // ID Owner sebagai Store ID
+                                    storeName: profile?.entity_name || profile?.full_name || 'Toko Saya',
+                                    employeeName: 'Owner', // Nama samaran
+                                    role: 'Pemilik', // Role spesial
+                                    id: user.id, // Pakai ID Owner juga
+                                    pin: 'OWNER_PASS', // PIN Dummy (nanti di-bypass di backend)
+                                    permissions: ['POS_ACCESS'] // Hak akses penuh
+                                };
+                                // Simpan ke LocalStorage agar POSPage bisa baca
+                                localStorage.setItem('active_employee_session', JSON.stringify(ownerSession));
+                                
+                                // Pindah halaman
+                                navigate('/pos-mode');
+                            }} 
+                        />
                         <MenuCard icon={Receipt} label="Invoice" onClick={() => navigate('/invoice')} colorClass="bg-red-50 text-red-600"/>
                         <MenuCard icon={Calculator} label="Hutang" onClick={() => navigate('/debt')} colorClass="bg-cyan-50 text-cyan-600"/>
                         <MenuCard icon={Users} label="Karyawan" onClick={() => navigate('/employees')} colorClass="bg-emerald-50 text-emerald-600"/>
@@ -747,11 +769,34 @@ export default function Dashboard() {
                               </div>
                               {isBusinessUser ? (
                                   <>
-                                      <MenuCard icon={Receipt} label="Invoice" onClick={() => handleSwitchNav('/invoice', 'BUSINESS')} colorClass="bg-red-50 text-red-600"/>
-                                      <MenuCard icon={Package} label="Stok" onClick={() => handleSwitchNav('/stock', 'BUSINESS')} colorClass="bg-orange-50 text-orange-600"/>
-                                      <MenuCard icon={BookOpenCheck} label="Jurnal" onClick={() => handleSwitchNav('/journal-process', 'BUSINESS')} colorClass="bg-indigo-50 text-indigo-600"/>
-                                      <MenuCard icon={Users} label="Karyawan" onClick={() => handleSwitchNav('/employees', 'BUSINESS')} colorClass="bg-emerald-50 text-emerald-600"/>
-                                      <MenuCard icon={ClipboardList} label="Laporan" onClick={() => handleSwitchNav('/reports-menu', 'BUSINESS')} colorClass="bg-rose-50 text-rose-600"/>
+                                      <MenuCard 
+                                        icon={ScanLine} 
+                                        label="Kasir" 
+                                        colorClass="bg-blue-50 text-blue-600"
+                                        onClick={() => {
+                                            // Trik: Bikin Session Palsu agar POSPage mengira ini adalah Karyawan
+                                            const ownerSession = {
+                                                storeId: user.id, // ID Owner sebagai Store ID
+                                                storeName: profile?.entity_name || profile?.full_name || 'Toko Saya',
+                                                employeeName: 'Owner', // Nama samaran
+                                                role: 'Pemilik', // Role spesial
+                                                id: user.id, // Pakai ID Owner juga
+                                                pin: 'OWNER_PASS', // PIN Dummy (nanti di-bypass di backend)
+                                                permissions: ['POS_ACCESS'] // Hak akses penuh
+                                            };
+                                            // Simpan ke LocalStorage agar POSPage bisa baca
+                                            localStorage.setItem('active_employee_session', JSON.stringify(ownerSession));
+                                            
+                                            // Pindah halaman
+                                            navigate('/pos-mode');
+                                        }} 
+                                    />
+                                    <MenuCard icon={Receipt} label="Invoice" onClick={() => navigate('/invoice')} colorClass="bg-red-50 text-red-600"/>
+                                    <MenuCard icon={Calculator} label="Hutang" onClick={() => navigate('/debt')} colorClass="bg-cyan-50 text-cyan-600"/>
+                                    <MenuCard icon={Users} label="Karyawan" onClick={() => navigate('/employees')} colorClass="bg-emerald-50 text-emerald-600"/>
+                                    <MenuCard icon={Landmark} label="Pajak" onClick={() => navigate('/tax')} colorClass="bg-violet-50 text-violet-600"/>
+                                    <MenuCard icon={Package} label="Gudang" onClick={() => navigate('/warehouse')} colorClass="bg-amber-50 text-amber-600"/>
+                                    <MenuCard icon={Target} label="Target" onClick={() => navigate('/targets')} colorClass="bg-lime-50 text-lime-600"/>
                                   </>
                               ) : (
                                   <>

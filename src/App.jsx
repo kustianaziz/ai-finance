@@ -33,6 +33,16 @@ import PrivateRoute from './components/PrivateRoute';
 import WalletPage from './pages/WalletPage';
 import ProfilePage from './pages/ProfilePage';
 
+// --- Halaman Business ---
+import EmployeePage from './pages/business/EmployeePage';
+import WarehousePage from './pages/business/WarehousePage';
+import StorePortal from './pages/public/StorePortal';
+import EmployeeDashboard from './pages/business/EmployeeDashboard';
+import POSPage from './pages/pos/POSPage';
+import ProductPage from './pages/business/ProductPage';
+import InventoryPage from './pages/business/InventoryPage';
+import InventoryDetailPage from './pages/business/InventoryDetailPage';
+
 // --- CONFIG EMAIL ADMIN ---
 const ADMIN_EMAIL = 'kustianaziz6@gmail.com'; 
 
@@ -108,6 +118,13 @@ function App() {
     <AuthProvider>
       <BrowserRouter>
           <Routes>
+            <Route path="/portal/:slug" element={<StorePortal />} />
+            <Route path="/employee-dashboard" element={<EmployeeDashboard />} />
+            <Route path="/pos-mode" element={<POSPage />} />
+            <Route path="/warehouse" element={<WarehousePage />} />
+            <Route path="/products" element={<ProductPage />} />
+            <Route path="/inventory" element={<InventoryPage />} />
+            <Route path="/inventory/:id" element={<InventoryDetailPage />} />
             <Route path="/wallets" element={<PrivateRoute><WalletPage /></PrivateRoute>} />
             
             {/* PUBLIC */}
@@ -144,9 +161,8 @@ function App() {
                     <Route path="/invoice" element={<NotFoundPage />} />
                     <Route path="/stock" element={<NotFoundPage />} />
                     <Route path="/debt" element={<NotFoundPage />} />
-                    <Route path="/employees" element={<NotFoundPage />} />
+                    <Route path="/employees" element={<EmployeePage />} />
                     <Route path="/tax" element={<NotFoundPage />} />
-                    <Route path="/warehouse" element={<NotFoundPage />} />
                     <Route path="/targets" element={<NotFoundPage />} />
                     <Route path="/members" element={<NotFoundPage />} />
                     <Route path="/dues" element={<NotFoundPage />} />

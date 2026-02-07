@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthProvider';
 import { 
   ArrowLeft, Camera, User, Phone, 
   Calendar, Building2, Save, LogOut, Loader2, Info, X, 
-  CheckCircle2, AlertCircle, HelpCircle // Icon tambahan untuk notif
+  CheckCircle2, AlertCircle, HelpCircle, Store, Copy, ExternalLink, Globe
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -86,10 +86,11 @@ export default function ProfilePage() {
     entity_name: '',
     account_type: 'personal',
     start_date_cycle: 1, 
-    avatar_url: null
+    avatar_url: null,
+    store_slug: '' 
   });
 
-  // --- HELPER NOTIFIKASI ---
+  // Helper Notifikasi
   const showAlert = (type, title, message) => setNotif({ show: true, type, title, message, onConfirm: null });
   const showConfirm = (title, message, onConfirm) => setNotif({ show: true, type: 'confirm', title, message, onConfirm });
   const closeNotif = () => setNotif({ ...notif, show: false });
@@ -118,7 +119,8 @@ export default function ProfilePage() {
           entity_name: data.entity_name || '',
           account_type: data.account_type || 'personal',
           start_date_cycle: data.start_date_cycle || 1,
-          avatar_url: data.avatar_url
+          avatar_url: data.avatar_url,
+          store_slug: data.store_slug || ''
         });
         localStorage.setItem('user_profile_cache', JSON.stringify(data));
       }
@@ -140,6 +142,7 @@ export default function ProfilePage() {
         phone: formData.phone,
         entity_name: formData.entity_name,
         start_date_cycle: parseInt(formData.start_date_cycle),
+        store_slug: formData.store_slug || null, 
         updated_at: new Date(),
       };
 
@@ -151,10 +154,8 @@ export default function ProfilePage() {
       const newCache = { ...cached, ...updates };
       localStorage.setItem('user_profile_cache', JSON.stringify(newCache));
 
-      // GANTI ALERT BROWSER DENGAN CUSTOM
       showAlert('success', 'Berhasil', 'Profil berhasil diperbarui!');
       
-      // Delay navigasi sedikit agar user sempat baca notif
       setTimeout(() => {
           navigate('/dashboard'); 
       }, 1500);
@@ -166,7 +167,7 @@ export default function ProfilePage() {
     }
   };
 
-  // 3. Handle Logout (Pakai Custom Confirm)
+  // 3. Handle Logout
   const handleLogout = () => {
     showConfirm(
         "Logout?", 
@@ -185,6 +186,21 @@ export default function ProfilePage() {
       if (type === 'organization') return 'Akun Organisasi';
       if (type === 'personal_pro') return 'Personal Pro';
       return 'Personal (Free)';
+  };
+
+  // Helper Copy Link
+  const copyLink = () => {
+      if (!formData.store_slug) return;
+      const url = `${window.location.origin}/portal/${formData.store_slug}`;
+      navigator.clipboard.writeText(url);
+      alert("Link tersalin!"); // Atau pakai toast/notif custom
+  };
+
+  // Helper Open Link
+  const openLink = () => {
+      if (!formData.store_slug) return;
+      const url = `/portal/${formData.store_slug}`;
+      window.open(url, '_blank');
   };
 
   return (
@@ -268,7 +284,57 @@ export default function ProfilePage() {
                 )}
             </div>
 
-            {/* PENGATURAN SIKLUS (DENGAN CUSTOM PICKER) */}
+            {/* KONFIGURASI TOKO / LINK PORTAL (FITUR BARU) */}
+            {['business', 'organization'].includes(formData.account_type) && (
+                <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 space-y-4">
+                    <h3 className="font-bold text-slate-800 text-sm border-b border-slate-50 pb-2 mb-2 flex items-center gap-2">
+                        <Store size={16} className="text-indigo-600"/> Portal Karyawan
+                    </h3>
+                    
+                    <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-600">ID Toko (Slug)</label>
+                        <div className="flex gap-2 items-center">
+                            <div className="p-3 bg-slate-50 rounded-xl text-xs flex items-center text-slate-400 font-bold border border-slate-200">
+                                vizofin.app/
+                            </div>
+                            <input 
+                                type="text" 
+                                placeholder="toko-kamu"
+                                value={formData.store_slug}
+                                onChange={(e) => setFormData({...formData, store_slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-')})}
+                                className="flex-1 p-3 bg-indigo-50 rounded-xl text-sm font-bold text-indigo-700 outline-none focus:ring-2 ring-indigo-100 transition placeholder:text-indigo-300"
+                            />
+                        </div>
+
+                        {/* DISPLAY LINK LENGKAP YANG BISA DI-COPY */}
+                        {formData.store_slug && (
+                            <div className="mt-3 p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-2 animate-fade-in">
+                                <div className="flex items-center gap-2 overflow-hidden">
+                                    <Globe size={16} className="text-slate-400 shrink-0"/>
+                                    <span className="text-xs font-medium text-slate-600 truncate">
+                                        {window.location.origin}/portal/<span className="font-bold text-indigo-600">{formData.store_slug}</span>
+                                    </span>
+                                </div>
+                                <div className="flex gap-1 shrink-0">
+                                    <button onClick={copyLink} className="p-1.5 bg-white border border-slate-200 rounded-lg text-slate-500 hover:text-indigo-600 hover:border-indigo-200 transition" title="Salin Link">
+                                        <Copy size={14}/>
+                                    </button>
+                                    <button onClick={openLink} className="p-1.5 bg-white border border-slate-200 rounded-lg text-slate-500 hover:text-indigo-600 hover:border-indigo-200 transition" title="Buka Portal">
+                                        <ExternalLink size={14}/>
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="bg-blue-50 p-2.5 rounded-lg flex gap-2 items-start text-[10px] text-blue-600 font-medium leading-relaxed mt-1">
+                            <Info size={14} className="shrink-0 mt-0.5"/>
+                            <p>Link ini digunakan karyawan untuk Login POS tanpa perlu akun email/password Owner.</p>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* PENGATURAN SIKLUS */}
             <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 space-y-4">
                 <h3 className="font-bold text-slate-800 text-sm border-b border-slate-50 pb-2 mb-2 flex items-center gap-2">
                     <Calendar size={16} className="text-indigo-600"/> Pengaturan Siklus
@@ -276,8 +342,6 @@ export default function ProfilePage() {
 
                 <div className="space-y-2">
                     <label className="text-xs font-bold text-slate-600">Tanggal Mulai Budget (Gajian)</label>
-                    
-                    {/* BUTTON PICKER PENGGANTI SELECT */}
                     <button 
                         onClick={() => setShowDayPicker(true)}
                         className="w-full p-4 bg-indigo-50 border border-indigo-100 rounded-xl flex items-center justify-between group hover:bg-indigo-100 transition"
@@ -293,7 +357,6 @@ export default function ProfilePage() {
                         </div>
                         <Calendar size={18} className="text-indigo-400"/>
                     </button>
-                    
                     <div className="bg-slate-50 p-3 rounded-xl flex gap-3 items-start text-slate-500 text-xs leading-relaxed mt-2 border border-slate-100">
                         <Info size={16} className="shrink-0 mt-0.5 text-slate-400"/>
                         <p>
