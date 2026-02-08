@@ -9,7 +9,6 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   
   // STATE BARU: KARYAWAN AKTIF
-  // Ini yang bikin Dashboard Karyawan bisa dibuka!
   const [activeEmployee, setActiveEmployee] = useState(() => {
       try {
           const saved = localStorage.getItem('active_employee_session');
@@ -38,6 +37,14 @@ export const AuthProvider = ({ children }) => {
 
     return () => subscription.unsubscribe();
   }, []);
+
+  // --- FUNGSI LOGIN OWNER (YANG HILANG TADI) ---
+  const signIn = async ({ email, password }) => {
+    return await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+  };
 
   // --- FUNGSI LOGIN KARYAWAN (PIN) ---
   const employeeLogin = async (employeeId, pinInput) => {
@@ -96,16 +103,24 @@ export const AuthProvider = ({ children }) => {
       return activeEmployee?.permissions?.includes(permissionCode);
   };
 
+  // --- LOGOUT OWNER ---
+  const signOut = async () => {
+      await supabase.auth.signOut();
+      localStorage.removeItem('active_employee_session');
+      setActiveEmployee(null);
+  };
+
   return (
     <AuthContext.Provider value={{ 
         user, 
         session, 
-        loading, // Penting diexpose untuk routing
+        loading, 
         activeEmployee, 
+        signIn, // <-- INI SUDAH DITAMBAHKAN
+        signOut, 
         employeeLogin, 
         employeeLogout,
-        canAccess, 
-        signOut: () => supabase.auth.signOut() 
+        canAccess
     }}>
       {!loading && children}
     </AuthContext.Provider>
@@ -117,4 +132,4 @@ export default AuthProvider;
 
 export const useAuth = () => {
   return useContext(AuthContext);
-};
+}; 
