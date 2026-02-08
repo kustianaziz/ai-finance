@@ -42,6 +42,7 @@ import POSPage from './pages/pos/POSPage';
 import ProductPage from './pages/business/ProductPage';
 import InventoryPage from './pages/business/InventoryPage';
 import InventoryDetailPage from './pages/business/InventoryDetailPage';
+import DebtPage from './pages/business/DebtPage';
 
 // --- CONFIG EMAIL ADMIN ---
 const ADMIN_EMAIL = 'kustianaziz6@gmail.com'; 
@@ -125,6 +126,7 @@ function App() {
             <Route path="/products" element={<ProductPage />} />
             <Route path="/inventory" element={<InventoryPage />} />
             <Route path="/inventory/:id" element={<InventoryDetailPage />} />
+            <Route path="/debts" element={<DebtPage />} />
             <Route path="/wallets" element={<PrivateRoute><WalletPage /></PrivateRoute>} />
             
             {/* PUBLIC */}

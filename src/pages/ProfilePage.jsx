@@ -1,11 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+
+// IMPORT MUNDUR 2 LEVEL (Sesuai posisi src/page/public/)
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthProvider';
+import ModalInfo from '../components/ModalInfo'; 
+
 import { 
   ArrowLeft, Camera, User, Phone, 
   Calendar, Building2, Save, LogOut, Loader2, Info, X, 
-  CheckCircle2, AlertCircle, HelpCircle, Store, Copy, ExternalLink, Globe
+  CheckCircle2, AlertCircle, HelpCircle, Store, Copy, ExternalLink, Globe, Check
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -74,6 +78,7 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
   const [showDayPicker, setShowDayPicker] = useState(false);
+  const [copySuccess, setCopySuccess] = useState(false); // State baru
   
   // State Notifikasi Custom
   const [notif, setNotif] = useState({ show: false, type: 'info', title: '', message: '', onConfirm: null });
@@ -188,12 +193,15 @@ export default function ProfilePage() {
       return 'Personal (Free)';
   };
 
-  // Helper Copy Link
+  // Helper Copy Link (FIXED: Tanpa Alert Popup)
   const copyLink = () => {
       if (!formData.store_slug) return;
       const url = `${window.location.origin}/portal/${formData.store_slug}`;
       navigator.clipboard.writeText(url);
-      alert("Link tersalin!"); // Atau pakai toast/notif custom
+      
+      // Tampilkan indikator sukses kecil
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 2000); // Hilang setelah 2 detik
   };
 
   // Helper Open Link
@@ -306,23 +314,28 @@ export default function ProfilePage() {
                             />
                         </div>
 
-                        {/* DISPLAY LINK LENGKAP YANG BISA DI-COPY */}
                         {formData.store_slug && (
-                            <div className="mt-3 p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-2 animate-fade-in">
+                            <div className="mt-3 p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-2 animate-fade-in relative">
                                 <div className="flex items-center gap-2 overflow-hidden">
                                     <Globe size={16} className="text-slate-400 shrink-0"/>
                                     <span className="text-xs font-medium text-slate-600 truncate">
                                         {window.location.origin}/portal/<span className="font-bold text-indigo-600">{formData.store_slug}</span>
                                     </span>
                                 </div>
-                                <div className="flex gap-1 shrink-0">
+                                <div className="flex gap-1 shrink-0 relative">
                                     <button onClick={copyLink} className="p-1.5 bg-white border border-slate-200 rounded-lg text-slate-500 hover:text-indigo-600 hover:border-indigo-200 transition" title="Salin Link">
-                                        <Copy size={14}/>
+                                        {copySuccess ? <Check size={14} className="text-green-500"/> : <Copy size={14}/>}
                                     </button>
                                     <button onClick={openLink} className="p-1.5 bg-white border border-slate-200 rounded-lg text-slate-500 hover:text-indigo-600 hover:border-indigo-200 transition" title="Buka Portal">
                                         <ExternalLink size={14}/>
                                     </button>
                                 </div>
+                                {/* INDIKATOR SUKSES (KECIL DI BAWAH) */}
+                                {copySuccess && (
+                                    <span className="absolute -bottom-5 right-0 text-[10px] font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded-full border border-green-100 animate-fade-in">
+                                        Link tersalin!
+                                    </span>
+                                )}
                             </div>
                         )}
 

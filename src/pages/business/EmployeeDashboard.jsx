@@ -76,7 +76,7 @@ export default function EmployeeDashboard() {
       { 
           label: 'Hutang', 
           icon: Calculator, 
-          path: '/debt', 
+          path: '/debts', 
           permission: 'DEBT_MANAGE', 
           color: 'bg-cyan-50 text-cyan-600' 
       },
