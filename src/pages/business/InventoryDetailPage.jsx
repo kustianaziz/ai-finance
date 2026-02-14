@@ -6,7 +6,7 @@ import ModalInfo from '../../components/ModalInfo';
 import MoneyInput from '../../components/MoneyInput';
 import { 
   ArrowLeft, Save, Loader2, ArrowUpRight, ArrowDownLeft, 
-  Calendar, History, X, Edit2, Trash2
+  Calendar, History, X, Edit2, Trash2, Wallet
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -14,9 +14,11 @@ export default function InventoryDetailPage() {
   const { id } = useParams(); 
   const navigate = useNavigate();
   const { user, activeEmployee } = useAuth();
+  const ownerId = user?.id || activeEmployee?.storeId; // Ambil Owner ID
   const actorName = activeEmployee ? activeEmployee.name : 'Owner';
 
   const [item, setItem] = useState(null);
+  const [wallets, setWallets] = useState([]); // State Wallets
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   
@@ -32,7 +34,8 @@ export default function InventoryDetailPage() {
 
   const [showTransModal, setShowTransModal] = useState(false);
   const [transType, setTransType] = useState('restock'); 
-  const [stockForm, setStockForm] = useState({ amount: '', notes: '', price: 0 });
+  // Tambahkan wallet_id di form
+  const [stockForm, setStockForm] = useState({ amount: '', notes: '', price: 0, wallet_id: '', supplier: '' });
   const [processing, setProcessing] = useState(false);
   
   // Notif Custom
@@ -40,52 +43,81 @@ export default function InventoryDetailPage() {
   const showAlert = (type, title, message) => setNotif({ isOpen: true, type, title, message, onConfirm: null });
   const showConfirm = (title, message, onConfirm) => setNotif({ isOpen: true, type: 'error', title, message, onConfirm, confirmText: 'Ya, Hapus' });
 
-  useEffect(() => { fetchDetail(); }, [id, startDate, endDate]);
+  useEffect(() => { 
+      if(ownerId) fetchDetail(); 
+  }, [id, startDate, endDate, ownerId]);
 
   const fetchDetail = async () => {
       try {
+          // 1. Ambil Item Detail
           const { data: itemData } = await supabase.from('inventory_items').select('*, warehouses(name)').eq('id', id).single();
           setItem(itemData);
 
-          let query = supabase.from('inventory_transactions').select('*').eq('inventory_item_id', id).order('created_at', { ascending: false });
+          // 2. Ambil Riwayat Transaksi
+          let query = supabase.from('inventory_transactions')
+            .select('*, wallets(name)') // Join nama wallet
+            .eq('inventory_item_id', id)
+            .order('created_at', { ascending: false });
+            
           if (startDate) query = query.gte('created_at', `${startDate}T00:00:00`);
           if (endDate) query = query.lte('created_at', `${endDate}T23:59:59`);
 
           const { data: historyData } = await query;
           setHistory(historyData || []);
+
+          // 3. Ambil Daftar Wallet (Hanya Bisnis) untuk Dropdown
+          const { data: walletData } = await supabase
+            .from('wallets')
+            .select('id, name, initial_balance')
+            .eq('user_id', ownerId)
+            .eq('allocation_type', 'BUSINESS'); // Filter wallet bisnis
+          
+          setWallets(walletData || []);
+
       } catch (error) { console.error(error); } finally { setLoading(false); }
   };
 
   const handleUpdateStock = async () => {
       if (!stockForm.amount || stockForm.amount <= 0) return showAlert('error', 'Error', 'Jumlah harus diisi');
-      setProcessing(true);
-      try {
-          let finalAmount = parseFloat(stockForm.amount);
-          if (transType !== 'restock') finalAmount = -finalAmount;
-
-          const { error } = await supabase.rpc('update_stock_transaction', {
-              p_item_id: id,
-              p_amount: finalAmount,
-              p_type: transType,
-              p_notes: stockForm.notes,
-              p_actor_name: actorName,
-              p_price: transType === 'restock' ? stockForm.price : 0
-          });
-
-          if (error) throw error;
-          showAlert('success', 'Sukses', 'Stok diperbarui');
-          setStockForm({ amount: '', notes: '', price: 0 });
-          setShowTransModal(false);
-          fetchDetail();
-      } catch (e) {
-          showAlert('error', 'Gagal', e.message);
-      } finally {
-          setProcessing(false);
+      
+      // Validasi Wallet jika Restock (Opsional tapi disarankan)
+      if (transType === 'restock' && !stockForm.wallet_id) {
+         // Bisa dibuat mandatory atau optional. Di sini kita buat optional dulu biar gak kaget.
+         // return showAlert('error', 'Pilih Dompet', 'Sumber dana pembelian wajib dipilih.');
       }
-  };
+
+      setProcessing(true);
+    try {
+        let finalAmount = parseFloat(stockForm.amount);
+        if (transType !== 'restock') finalAmount = -finalAmount;
+
+        const { error } = await supabase.rpc('update_stock_transaction', {
+            p_item_id: id,
+            p_amount: finalAmount,
+            p_type: transType,
+            p_notes: stockForm.notes,
+            p_actor_name: actorName,
+            p_price: transType === 'restock' ? stockForm.price : 0,
+            p_wallet_id: (transType === 'restock' && stockForm.wallet_id) ? stockForm.wallet_id : null,
+            p_employee_id: activeEmployee ? activeEmployee.id : null,
+            p_merchant_name: (transType === 'restock' && stockForm.supplier) ? stockForm.supplier : null // <--- KIRIM SUPPLIER
+        });
+
+        if (error) throw error;
+        showAlert('success', 'Sukses', 'Stok diperbarui & Saldo terpotong (jika dipilih)');
+        // Reset form lengkap
+        setStockForm({ amount: '', notes: '', price: 0, wallet_id: '', supplier: '' }); 
+        setShowTransModal(false);
+        fetchDetail();
+    } catch (e) {
+        showAlert('error', 'Gagal', e.message);
+    } finally {
+        setProcessing(false);
+    }
+};
 
   const handleDeleteLog = (logId) => {
-      showConfirm('Batalkan Riwayat?', 'Stok akan dikembalikan ke kondisi sebelum transaksi ini. Lanjutkan?', async () => {
+      showConfirm('Batalkan Riwayat?', 'Stok akan dikembalikan. (Saldo dompet TIDAK otomatis kembali, harap sesuaikan manual di menu Keuangan). Lanjutkan?', async () => {
           setNotif(prev => ({...prev, type: 'loading', title: 'Memproses...', message: ''}));
           try {
               const { data, error } = await supabase.rpc('delete_inventory_log_rollback', { p_log_id: logId });
@@ -107,7 +139,7 @@ export default function InventoryDetailPage() {
   return (
     <div className="h-screen bg-slate-50 font-sans flex flex-col overflow-hidden">
         
-        {/* HEADER FIXED (COMPACT) */}
+        {/* HEADER FIXED */}
         <div className="shrink-0 bg-teal-600 shadow-xl z-50">
             <div className="px-6 pt-6 pb-6">
                 <div className="flex items-center gap-3 mb-6">
@@ -118,7 +150,6 @@ export default function InventoryDetailPage() {
                     </div>
                 </div>
 
-                {/* INFO STOK & ACTION DALAM HEADER */}
                 <div className="flex justify-between items-end">
                     <div>
                         <p className="text-[10px] text-teal-200 uppercase font-bold mb-1">Stok Saat Ini</p>
@@ -140,9 +171,8 @@ export default function InventoryDetailPage() {
             </div>
         </div>
 
-        {/* CONTENT (RIWAYAT SCROLLABLE) */}
+        {/* CONTENT */}
         <div className="flex-1 overflow-y-auto bg-slate-50 flex flex-col">
-            {/* Filter Tanggal Sticky di dalam container */}
             <div className="sticky top-0 z-40 bg-slate-50 px-4 py-3 border-b border-slate-200 flex justify-between items-center shadow-sm">
                 <h3 className="font-bold text-slate-700 text-sm flex items-center gap-2"><History size={16} className="text-teal-500"/> Riwayat</h3>
                 <div className="flex bg-white border border-slate-200 rounded-lg p-1 gap-2 shadow-sm items-center px-2">
@@ -169,7 +199,10 @@ export default function InventoryDetailPage() {
                                     <span className="text-[10px] text-slate-400">{formatDate(log.created_at)}</span>
                                 </div>
                                 <p className="text-xs text-slate-700 font-medium">{log.notes || '-'}</p>
-                                <p className="text-[9px] text-slate-400 mt-0.5">Oleh: {log.created_by}</p>
+                                <div className="flex gap-2 mt-0.5 text-[9px] text-slate-400">
+                                    <span>Oleh: {log.created_by}</span>
+                                    {log.wallets && <span className="text-teal-600 font-bold">• Via {log.wallets.name}</span>}
+                                </div>
                             </div>
                             <div className="flex items-center gap-3">
                                 <div className="text-right">
@@ -187,7 +220,7 @@ export default function InventoryDetailPage() {
             </div>
         </div>
 
-        {/* MODAL TRANSAKSI (SAMA SEPERTI SEBELUMNYA) */}
+        {/* MODAL TRANSAKSI */}
         <AnimatePresence>
             {showTransModal && (
                 <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4" onClick={() => setShowTransModal(false)}>
@@ -204,12 +237,48 @@ export default function InventoryDetailPage() {
                                     <label className="text-xs font-bold text-slate-500 mb-2 block">Jumlah ({item.unit})</label>
                                     <input type="number" autoFocus className="w-full p-4 bg-slate-50 rounded-xl border border-slate-200 text-xl font-bold outline-none focus:border-teal-500 text-center" placeholder="0" value={stockForm.amount} onChange={e => setStockForm({...stockForm, amount: e.target.value})} />
                                 </div>
+                                
                                 {transType === 'restock' && (
-                                    <div>
-                                        <label className="text-xs font-bold text-slate-500 mb-2 block">Harga Beli Satuan</label>
-                                        <MoneyInput className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:border-teal-500" placeholder="Rp 0" value={stockForm.price} onChange={val => setStockForm({...stockForm, price: val})} />
-                                    </div>
+                                    <>
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-500 mb-2 block">Harga Beli Satuan (HPP)</label>
+                                            <MoneyInput className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:border-teal-500" placeholder="Rp 0" value={stockForm.price} onChange={val => setStockForm({...stockForm, price: val})} />
+                                        </div>
+                                        
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-500 mb-2 block">Nama Supplier / Toko (Opsional)</label>
+                                            <input 
+                                                type="text" 
+                                                placeholder="Cth: Toko Plastik Jaya / Pasar Induk" 
+                                                className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 text-sm font-medium outline-none focus:border-teal-500" 
+                                                value={stockForm.supplier} 
+                                                onChange={e => setStockForm({...stockForm, supplier: e.target.value})} 
+                                            />
+                                        </div>
+
+                                        {/* Dropdown Sumber Dana */}
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-500 mb-2 block">Sumber Dana (Bayar Pakai Apa?)</label>
+                                            <div className="relative">
+                                                <Wallet size={16} className="absolute left-3 top-3.5 text-slate-400"/>
+                                                <select 
+                                                    className="w-full pl-10 p-3 bg-slate-50 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:border-teal-500"
+                                                    value={stockForm.wallet_id}
+                                                    onChange={e => setStockForm({...stockForm, wallet_id: e.target.value})}
+                                                >
+                                                    <option value="">-- Pilih Dompet (Opsional) --</option>
+                                                    {wallets.map(w => (
+                                                        <option key={w.id} value={w.id}>
+                                                            {w.name} (Saldo: {formatIDR(w.initial_balance)})
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <p className="text-[9px] text-slate-400 mt-1 ml-1">*Jika dipilih, saldo dompet akan otomatis berkurang.</p>
+                                        </div>
+                                    </>
                                 )}
+
                                 <div>
                                     <label className="text-xs font-bold text-slate-500 mb-2 block">Catatan</label>
                                     <input type="text" placeholder={transType === 'restock' ? "Cth: Belanja Pasar" : "Cth: Produksi Harian"} className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 text-sm font-medium outline-none focus:border-teal-500" value={stockForm.notes} onChange={e => setStockForm({...stockForm, notes: e.target.value})} />

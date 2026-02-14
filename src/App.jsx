@@ -43,6 +43,9 @@ import ProductPage from './pages/business/ProductPage';
 import InventoryPage from './pages/business/InventoryPage';
 import InventoryDetailPage from './pages/business/InventoryDetailPage';
 import DebtPage from './pages/business/DebtPage';
+import InvoicePage from './pages/business/InvoicePage';
+import CoaPage from './pages/business/CoaPage';
+import JournalPage from './pages/business/JournalPage';
 
 // --- CONFIG EMAIL ADMIN ---
 const ADMIN_EMAIL = 'kustianaziz6@gmail.com'; 
@@ -127,6 +130,8 @@ function App() {
             <Route path="/inventory" element={<InventoryPage />} />
             <Route path="/inventory/:id" element={<InventoryDetailPage />} />
             <Route path="/debts" element={<DebtPage />} />
+            <Route path="/invoice" element={<InvoicePage />} />
+            <Route path="/coa" element={<CoaPage />} />
             <Route path="/wallets" element={<PrivateRoute><WalletPage /></PrivateRoute>} />
             
             {/* PUBLIC */}
@@ -153,6 +158,7 @@ function App() {
                     <Route path="/upgrade" element={<UpgradePage />} />
                     <Route path="/accounting" element={<AccountingPage />} />
                     <Route path="/journal-process" element={<JournalProcessPage />} />
+                    <Route path="/journal" element={<JournalPage />} />
                     <Route path="/reports-menu" element={<ReportsMenuPage />} />
                     <Route path="/report-profit-loss" element={<ProfitLossPage />} />
                     <Route path="/report-balance-sheet" element={<BalanceSheetPage />} />
@@ -160,7 +166,6 @@ function App() {
                     <Route path="/report-journal" element={<JournalReportPage />} />
                     <Route path="/report-ledger" element={<LedgerPage />} />
                     <Route path="/manual-input" element={<ManualInputPage />} />
-                    <Route path="/invoice" element={<NotFoundPage />} />
                     <Route path="/stock" element={<NotFoundPage />} />
                     <Route path="/debt" element={<NotFoundPage />} />
                     <Route path="/employees" element={<EmployeePage />} />

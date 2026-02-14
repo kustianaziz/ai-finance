@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthProvider';
 import { 
   LogOut, ScanLine, Package, ClipboardList, 
-  Settings, User, ShoppingBag, ArrowLeft, Loader2,
-  Receipt, Calculator, Landmark, PiggyBank, Archive
+  Settings, ShoppingBag, Loader2,
+  Receipt, Calculator, Landmark, PiggyBank, Archive,
+  BookOpenCheck, Users, HandCoins, ScrollText, Target
 } from 'lucide-react';
 
 export default function EmployeeDashboard() {
@@ -12,7 +13,7 @@ export default function EmployeeDashboard() {
   const { activeEmployee, employeeLogout, canAccess } = useAuth();
   const [checking, setChecking] = useState(true);
 
-  // 1. Proteksi Halaman & Logic Redirect Pintar
+  // 1. Proteksi Halaman
   useEffect(() => {
     const timer = setTimeout(() => {
         if (!activeEmployee) {
@@ -33,7 +34,7 @@ export default function EmployeeDashboard() {
   if (checking) return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><Loader2 className="animate-spin text-blue-600"/></div>;
   if (!activeEmployee) return null;
 
-  // 2. DEFINISI MENU LENGKAP (Sesuai Rencana Grand Design)
+  // 2. DEFINISI MENU LENGKAP (SINKRON DENGAN OWNER DASHBOARD)
   const ALL_MENUS = [
       // --- OPERASIONAL UTAMA ---
       { 
@@ -51,18 +52,18 @@ export default function EmployeeDashboard() {
           color: 'bg-orange-50 text-orange-600' 
       },
       { 
-          label: 'Bahan & Alat', 
+          label: 'Bahan & Alat', // Inventory
           icon: Archive, 
           path: '/inventory', 
           permission: 'INVENTORY_MANAGE', 
           color: 'bg-teal-50 text-teal-600' 
       },
       { 
-          label: 'Gudang', 
+          label: 'Gudang', // Warehouse (Lokasi Stok)
           icon: Package, 
           path: '/warehouse', 
           permission: 'STOCK_MANAGE', 
-          color: 'bg-indigo-50 text-indigo-600' 
+          color: 'bg-amber-50 text-amber-600' // Disamakan dengan Owner (Amber)
       },
 
       // --- KEUANGAN & ADMIN ---
@@ -76,7 +77,7 @@ export default function EmployeeDashboard() {
       { 
           label: 'Hutang', 
           icon: Calculator, 
-          path: '/debts', 
+          path: '/debts', // FIXED: Plural (Sesuai App.jsx)
           permission: 'DEBT_MANAGE', 
           color: 'bg-cyan-50 text-cyan-600' 
       },
@@ -87,6 +88,36 @@ export default function EmployeeDashboard() {
           permission: 'TAX_MANAGE', 
           color: 'bg-violet-50 text-violet-600' 
       },
+      { 
+          label: 'Jurnal', // NEW: Tambahan biar sama kayak Owner
+          icon: BookOpenCheck, 
+          path: '/journal-process', 
+          permission: 'JOURNAL_MANAGE', // Pastikan permission ini ada di Role Owner
+          color: 'bg-indigo-50 text-indigo-600' 
+      },
+
+      // --- ORGANISASI (JIKA PERLU) ---
+      { 
+          label: 'Anggota', 
+          icon: Users, 
+          path: '/members', 
+          permission: 'MEMBER_MANAGE', 
+          color: 'bg-cyan-50 text-cyan-600' 
+      },
+      { 
+          label: 'Iuran', 
+          icon: HandCoins, 
+          path: '/dues', 
+          permission: 'FINANCE_MANAGE', 
+          color: 'bg-pink-50 text-pink-600' 
+      },
+      { 
+          label: 'Proposal', 
+          icon: ScrollText, 
+          path: '/proposals', 
+          permission: 'Proposal_View', // Sesuaikan kode permission
+          color: 'bg-yellow-50 text-yellow-600' 
+      },
 
       // --- MANAJEMEN & LAPORAN ---
       { 
@@ -94,14 +125,14 @@ export default function EmployeeDashboard() {
           icon: PiggyBank, 
           path: '/targets', 
           permission: 'BUDGET_TARGET_VIEW', 
-          color: 'bg-pink-50 text-pink-600' 
+          color: 'bg-lime-50 text-lime-600' 
       },
       { 
           label: 'Laporan', 
           icon: ClipboardList, 
           path: '/analytics', 
           permission: 'REPORT_VIEW', 
-          color: 'bg-emerald-50 text-emerald-600' 
+          color: 'bg-rose-50 text-rose-600' // Disamakan dengan Owner (Rose)
       },
       { 
           label: 'Pengaturan', 
@@ -118,6 +149,7 @@ export default function EmployeeDashboard() {
   const handleLogout = () => {
       if(window.confirm("Akhiri sesi kerja?")) {
           employeeLogout(); 
+          navigate('/login'); // Pastikan redirect ke login setelah logout
       }
   };
 
@@ -140,10 +172,13 @@ export default function EmployeeDashboard() {
                         <span className="inline-block bg-white/20 px-2.5 py-0.5 rounded-lg text-[10px] text-white font-bold backdrop-blur-sm border border-white/10">
                             {activeEmployee.role || 'Staff'}
                         </span>
+                        <span className="text-[10px] text-blue-100 bg-blue-700/50 px-2 py-0.5 rounded-lg">
+                            {activeEmployee.storeName}
+                        </span>
                     </div>
                 </div>
             </div>
-            <button onClick={handleLogout} className="p-2.5 bg-red-500/20 rounded-xl text-white hover:bg-red-500 transition border border-red-400/30 backdrop-blur-sm">
+            <button onClick={handleLogout} className="p-2.5 bg-red-500/20 rounded-xl text-white hover:bg-red-500 transition border border-red-400/30 backdrop-blur-sm shadow-sm active:scale-95">
                 <LogOut size={20}/>
             </button>
         </div>
@@ -179,12 +214,15 @@ export default function EmployeeDashboard() {
                           <button 
                               key={idx}
                               onClick={() => navigate(menu.path)}
-                              className="flex flex-col items-center justify-center gap-3 p-5 rounded-2xl border border-slate-50 shadow-sm hover:shadow-lg hover:border-blue-100 hover:scale-[1.02] transition-all active:scale-95 bg-white aspect-[4/3] group"
+                              className="flex flex-col items-center justify-center gap-3 p-5 rounded-2xl border border-slate-50 shadow-sm hover:shadow-lg hover:border-indigo-100 hover:scale-[1.02] transition-all active:scale-95 bg-white aspect-[4/3] group relative overflow-hidden"
                           >
-                              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${menu.color} group-hover:scale-110 transition-transform shadow-sm`}>
+                              {/* Background Decoration */}
+                              <div className={`absolute -right-4 -bottom-4 w-16 h-16 rounded-full opacity-10 ${menu.color.split(' ')[0]}`}></div>
+
+                              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${menu.color} group-hover:scale-110 transition-transform shadow-sm relative z-10`}>
                                   <menu.icon size={24}/>
                               </div>
-                              <span className="text-xs font-bold text-slate-600 group-hover:text-slate-900">{menu.label}</span>
+                              <span className="text-xs font-bold text-slate-600 group-hover:text-slate-900 relative z-10">{menu.label}</span>
                           </button>
                       ))}
                   </div>
@@ -193,9 +231,9 @@ export default function EmployeeDashboard() {
       </div>
 
       {/* FOOTER INFO */}
-      <div className="text-center mt-8 text-slate-400 text-[10px] px-10">
-          <p>Sesi aktif toko:</p>
-          <p className="font-bold text-slate-600 mt-1 text-sm">{activeEmployee.storeName || '...'}</p>
+      <div className="text-center mt-8 text-slate-400 text-[10px] px-10 pb-4">
+          <p>Logged in as <span className="font-bold text-slate-500">{activeEmployee.name}</span></p>
+          <p className="mt-0.5 opacity-70">{activeEmployee.storeName || '...'}</p>
       </div>
 
     </div>

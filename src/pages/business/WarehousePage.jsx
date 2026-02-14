@@ -178,7 +178,7 @@ export default function WarehousePage() {
                                     </div>
                                 </div>
                             </div>
-                            <div className="flex gap-1 shrink-0">
+                            <div className="flex gap-1 s{(!activeEmployee || activeEmployee.permissions.includes('STOCK_MANAGE')) && (hrink-0">
                                 {/* Tombol Edit hanya muncul untuk Owner atau Karyawan berizin */}
                                 {(!activeEmployee || activeEmployee.permissions.includes('STOCK_MANAGE')) && (
                                     <button onClick={() => { setFormData(item); setShowModal(true); }} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-100 rounded-lg transition"><Edit2 size={16}/></button>
@@ -197,16 +197,15 @@ export default function WarehousePage() {
       </div>
 
       {/* FAB ADD (Hanya untuk Owner atau Karyawan berizin) */}
-      {(!activeEmployee || activeEmployee.permissions.includes('STOCK_MANAGE')) && (
-          <div className="fixed bottom-6 left-0 right-0 mx-auto max-w-md px-5 z-40 pointer-events-none flex justify-end">
-              <button 
-                onClick={() => { setFormData({ id: null, name: '', address: '', is_default: false }); setShowModal(true); }}
-                className="pointer-events-auto w-14 h-14 bg-blue-600 text-white rounded-full shadow-xl shadow-blue-200 flex items-center justify-center hover:bg-blue-700 transition active:scale-90"
-              >
-                  <Plus size={24}/>
-              </button>
-          </div>
-      )}
+      {/* FAB ADD - Disederhanakan dulu */}
+    <div className="fixed bottom-6 left-0 right-0 mx-auto max-w-md px-5 z-40 pointer-events-none flex justify-end">
+        <button 
+        onClick={() => { setFormData({ id: null, name: '', address: '', is_default: false }); setShowModal(true); }}
+        className="pointer-events-auto w-14 h-14 bg-blue-600 text-white rounded-full shadow-xl shadow-blue-200 flex items-center justify-center hover:bg-blue-700 transition active:scale-90"
+        >
+            <Plus size={24}/>
+        </button>
+    </div>
 
       {/* MODAL FORM (SAMA SEPERTI SEBELUMNYA) */}
       <AnimatePresence>

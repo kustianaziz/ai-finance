@@ -79,7 +79,12 @@ export default function DebtPage() {
   };
 
   const fetchWallets = async () => {
-      const { data } = await supabase.from('wallets').select('id, name, initial_balance').eq('user_id', ownerId);
+      // Tambahkan filter allocation_type
+      const { data } = await supabase
+        .from('wallets')
+        .select('id, name, initial_balance')
+        .eq('user_id', ownerId)
+        .eq('allocation_type', 'BUSINESS'); // <--- Tambah baris ini
       if (data) setWallets(data);
   };
 
@@ -125,38 +130,27 @@ export default function DebtPage() {
 
       const payAmount = parseInt(payData.amount);
       if (payAmount > selectedDebt.remaining_amount) {
-          return showAlert('error', 'Gagal', 'Jumlah bayar melebihi sisa hutang.');
+          return showAlert('error', 'Gagal', 'Jumlah bayar melebihi sisa tagihan.');
       }
 
       setProcessing(true);
       try {
-          // A. Catat di tabel history pembayaran (Trigger DB akan update sisa hutang otomatis)
-          const { error: payError } = await supabase.from('debt_payments').insert({
-              debt_id: selectedDebt.id,
-              wallet_id: payData.wallet_id,
-              amount: payAmount,
-              notes: payData.notes,
-              created_by: activeEmployee?.id || null // Jika karyawan yg input
-          });
-
-          if (payError) throw payError;
-
-          // B. Update Saldo Wallet (Mutasi Uang)
-          // Jika Hutang (Payable) -> Kita bayar -> Saldo Berkurang (Negatif)
-          // Jika Piutang (Receivable) -> Kita terima -> Saldo Bertambah (Positif)
-          const adjustment = activeTab === 'payable' ? -payAmount : payAmount;
-          
-          const { error: walletError } = await supabase.rpc('increment_wallet_balance', {
+          // Panggil RPC Sakti (Sekali panggil, semua beres)
+          const { error } = await supabase.rpc('pay_manual_debt', {
+              p_debt_id: selectedDebt.id,
               p_wallet_id: payData.wallet_id,
-              p_amount: adjustment
+              p_amount: payAmount,
+              p_notes: payData.notes || `Pembayaran ${activeTab === 'payable' ? 'Hutang' : 'Piutang'}`,
+              p_employee_id: activeEmployee?.id || null
           });
 
-          if (walletError) throw walletError;
+          if (error) throw error;
 
-          showAlert('success', 'Lunas', 'Pembayaran berhasil dicatat & saldo diperbarui.');
+          showAlert('success', 'Berhasil', 'Pembayaran berhasil dicatat & jurnal diperbarui.');
           setShowPayModal(false);
           setPayData({ amount: '', wallet_id: '', notes: '' });
           fetchDebts();
+          fetchWallets(); // Refresh saldo tampilan
 
       } catch (e) {
           console.error(e);
@@ -187,7 +181,13 @@ export default function DebtPage() {
           {/* Top Bar (Dynamic Color) */}
           <div className={`${activeTab === 'payable' ? 'bg-red-600' : 'bg-green-600'} px-6 pt-6 pb-6 rounded-b-[2rem] relative z-10 transition-colors duration-300`}>
               <div className="flex items-center gap-3 mb-4">
-                  <button onClick={() => navigate(activeEmployee ? '/employee-dashboard' : '/dashboard')} className="p-2 rounded-full bg-white/20 hover:bg-white/30 text-white transition backdrop-blur-sm"><ArrowLeft size={20}/></button>
+                  <button 
+                        // Logic: Cek user (Owner) dulu, jika ada lempar ke /dashboard. Jika tidak, baru ke dashboard karyawan.
+                        onClick={() => navigate(user ? '/dashboard' : '/employee-dashboard')} 
+                        className="p-2 rounded-full bg-white/20 hover:bg-white/30 text-white transition backdrop-blur-sm"
+                    >
+                        <ArrowLeft size={20}/>
+                    </button>
                   <div className="flex-1"><h1 className="text-xl font-extrabold text-white">Catatan Hutang</h1><p className="text-xs text-white/80 font-medium">Manajemen Keuangan</p></div>
                   <button onClick={() => setShowCreateModal(true)} className="p-2 bg-white text-slate-800 rounded-xl shadow-md hover:bg-slate-100 transition active:scale-95"><Plus size={20}/></button>
               </div>
@@ -255,10 +255,31 @@ export default function DebtPage() {
                        </div>
 
                        {debt.status !== 'paid' && (
-                           <button onClick={() => { setSelectedDebt(debt); setShowPayModal(true); }} className={`w-full py-2 rounded-lg font-bold text-xs border border-dashed ${activeTab==='payable'?'border-red-200 text-red-600 hover:bg-red-50':'border-green-200 text-green-600 hover:bg-green-50'} transition flex items-center justify-center gap-2`}>
-                               <Banknote size={14}/> {activeTab === 'payable' ? 'Bayar Hutang' : 'Terima Pembayaran'}
-                           </button>
-                       )}
+                        <>
+                            {/* Cek apakah ini piutang dari Invoice (berdasarkan kata 'Invoice #' di deskripsi) */}
+                            {debt.type === 'receivable' && debt.description?.includes('Invoice #') ? (
+                                <div className="w-full py-2 px-3 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-between">
+                                    <span className="text-[10px] font-bold text-indigo-600 flex items-center gap-1 italic">
+                                        <AlertCircle size={12}/> Kelola via Menu Invoice
+                                    </span>
+                                    <button 
+                                        onClick={() => navigate('/invoice')} // Arahkan user ke menu invoice
+                                        className="text-[10px] font-black text-indigo-700 underline underline-offset-2"
+                                    >
+                                        Buka
+                                    </button>
+                                </div>
+                            ) : (
+                                /* Jika hutang manual biasa, tombol bayar tetap muncul */
+                                <button 
+                                    onClick={() => { setSelectedDebt(debt); setShowPayModal(true); }} 
+                                    className={`w-full py-2 rounded-lg font-bold text-xs border border-dashed ${activeTab==='payable'?'border-red-200 text-red-600 hover:bg-red-50':'border-green-200 text-green-600 hover:bg-green-50'} transition flex items-center justify-center gap-2`}
+                                >
+                                    <Banknote size={14}/> {activeTab === 'payable' ? 'Bayar Hutang' : 'Terima Pembayaran'}
+                                </button>
+                            )}
+                        </>
+                    )}
                    </div>
                );
            })

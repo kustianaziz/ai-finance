@@ -379,7 +379,7 @@ export const generateFinancialInsights = async (transactions, userId) => {
 
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: "llama-3.3-70b-versatile",
+            model: MODEL_NAME,
             temperature: 0.7, // Naikkan temperature biar lebih kreatif (tidak template)
             response_format: { type: "json_object" }
         });

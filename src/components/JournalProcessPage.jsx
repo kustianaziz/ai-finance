@@ -1,74 +1,51 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { supabase } from '../supabaseClient';
 import { fetchUnpostedTransactions, processSingleTransaction } from '../utils/journalWorker';
 import { ensureUserHasCOA } from '../utils/accountingService';
 import { useAuth } from '../context/AuthProvider';
-import ModalInfo from '../components/ModalInfo'; // Pastikan path import benar
-import { ArrowLeft, CheckCircle2, XCircle, AlertCircle, Play, Loader2, Search } from 'lucide-react';
+import ModalInfo from '../components/ModalInfo';
+import { 
+  ArrowLeft, CheckCircle2, XCircle, AlertCircle, Play, 
+  Loader2, Search, FileText, ShoppingBag, Truck, CreditCard, PackageOpen,
+  Clock
+} from 'lucide-react';
+
+const formatIDR = (num) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(num);
 
 export default function JournalProcessPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   
-  // State Filter
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [onlyBusiness, setOnlyBusiness] = useState(true); // Filter Default: Bisnis Only
-
-  // State Data & Proses
+  
   const [candidates, setCandidates] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  const isProcessingRef = useRef(false);
   const [progress, setProgress] = useState(0);
-  const [logs, setLogs] = useState([]); // Log detail eksekusi
 
-  // Modal State
-  const [modal, setModal] = useState({ isOpen: false, type: 'info', title: '', message: '', confirmText: 'Oke' });
-  const showModal = (type, title, message, confirmText) => setModal({ isOpen: true, type, title, message, confirmText });
-  const closeModal = () => setModal(prev => ({ ...prev, isOpen: false }));
+  const [modal, setModal] = useState({ isOpen: false, type: 'info', title: '', message: '' });
+  const showModal = (type, title, message) => setModal({ isOpen: true, type, title, message });
 
-  // Init Tanggal (Default 1 Minggu Terakhir)
+
   useEffect(() => {
     const today = new Date();
     const lastWeek = new Date(today);
-    lastWeek.setDate(today.getDate() - 7);
+    lastWeek.setDate(today.getDate() - 30); // Default 30 hari terakhir
     setStartDate(lastWeek.toISOString().split('T')[0]);
     setEndDate(today.toISOString().split('T')[0]);
   }, []);
 
-  // Handle Perubahan Tanggal (Auto Set EndDate +7 hari jika StartDate berubah)
-  const handleStartDateChange = (e) => {
-    const newStart = e.target.value;
-    setStartDate(newStart);
-    if (newStart) {
-        const dateObj = new Date(newStart);
-        dateObj.setDate(dateObj.getDate() + 7);
-        setEndDate(dateObj.toISOString().split('T')[0]);
-    }
-  };
-
-  // --- 1. CARI TRANSAKSI ---
   const handleSearch = async () => {
     setCandidates([]);
-    setLogs([]);
     setIsProcessing(true);
-    
     try {
         const data = await fetchUnpostedTransactions(user.id, startDate, endDate);
         
-        // Filter awal: Hanya yang belum dijurnal
-        let cleanData = data.filter(d => d.is_journalized === false);
-
-        // Filter Opsi: Hanya Bisnis?
-        if (onlyBusiness) {
-            cleanData = cleanData.filter(d => 
-                ['BUSINESS', 'ORGANIZATION', 'SALARY'].includes(d.allocation_type)
-            );
-        }
-
-        // Siapkan format data antrian
-        const formattedData = cleanData.map(item => ({ 
+        const formattedData = data.map(item => ({ 
             ...item, 
-            status: 'idle', // idle, processing, success, error, skipped
+            status: 'idle', 
             errorMsg: '' 
         }));
         
@@ -76,237 +53,223 @@ export default function JournalProcessPage() {
         setProgress(0);
         
         if (formattedData.length === 0) {
-            showModal('info', 'Semua Beres! ☕', onlyBusiness ? 'Tidak ada transaksi BISNIS yang pending.' : 'Tidak ada transaksi apapun yang pending.');
+            showModal('info', 'Data Kosong', 'Tidak ada transaksi pending (belum dijurnal) pada periode ini.');
         }
     } catch (error) {
-        showModal('error', 'Gagal Mengambil Data', error.message);
+        showModal('error', 'Gagal', error.message);
     } finally {
         setIsProcessing(false);
     }
   };
 
-  // --- 2. EKSEKUSI JURNAL ---
   const handleStartProcess = async () => {
-    if (candidates.length === 0) return;
+    // --- GEMBOK INSTAN (Pakai Ref) ---
+    // Cek apakah Ref sedang true? Kalau ya, langsung tendang.
+    if (isProcessingRef.current || candidates.length === 0) return;
+    
+    // Cek apakah semua sudah sukses
+    const allSuccess = candidates.every(c => c.status === 'success');
+    if (allSuccess) return;
+
+    // --- KUNCI PINTU ---
+    isProcessingRef.current = true; // <--- Kunci Instan (Sync)
+    setIsProcessing(true);          // <--- Kunci UI (Async)
     
     try {
-        await ensureUserHasCOA(user.id); // Pastikan COA ada dulu
-    } catch (e) {
-        showModal('error', 'COA Error', 'Gagal memuat Chart of Accounts. Hubungi admin.');
-        return;
-    }
+        // Pastikan COA ready
+        try { await ensureUserHasCOA(user.id); } catch(e) {}
 
-    setIsProcessing(true);
-    let successCount = 0;
-    let failCount = 0;
-    
-    // Copy array state ke variabel lokal agar tidak mutate state langsung
-    let queue = [...candidates]; 
+        let successCount = 0;
+        let failCount = 0;
+        let queue = [...candidates]; 
 
-    for (let i = 0; i < queue.length; i++) {
-        const item = queue[i];
+        for (let i = 0; i < queue.length; i++) {
+            // ... (Kode looping SAMA PERSIS seperti sebelumnya) ...
+            // Copy paste aja logic looping yang lama di sini
+            
+            const item = queue[i];
+            if (item.status === 'success') { successCount++; continue; }
 
-        // Skip jika sudah sukses sebelumnya (misal user klik proses ulang untuk yang gagal)
-        if (item.status === 'success' || item.status === 'skipped') {
-            successCount++;
-            continue;
-        }
+            // Update UI Status jadi processing
+            setCandidates(prev => {
+                const newData = [...prev];
+                newData[i].status = 'processing';
+                return newData;
+            });
 
-        // Update status UI -> Processing
-        updateCandidateStatus(i, 'processing');
-
-        // Jeda buatan (Throttle) agar API tidak tersedak (opsional, sesuaikan kebutuhan)
-        if (i > 0) await new Promise(r => setTimeout(r, 1500)); 
-
-        try {
-            // PROSES INTI
+            // Process
             const result = await processSingleTransaction(user.id, item);
 
-            if (result.success) {
-                // Sukses Jurnal atau Sengaja di-Skip (misal Personal)
-                const finalStatus = result.status === 'skipped' ? 'skipped' : 'success';
-                updateCandidateStatus(i, finalStatus);
-                successCount++;
-            } else {
-                // Gagal Logic (misal AI bingung atau validasi gagal)
-                updateCandidateStatus(i, 'error', result.error || 'Gagal memproses jurnal.');
-                failCount++;
-            }
-        } catch (err) {
-            // Gagal Teknis (Network error, dsb)
-            console.error("Critical Process Error:", err);
-            updateCandidateStatus(i, 'error', err.message || 'Terjadi kesalahan sistem.');
-            failCount++;
+            // Update Result
+            setCandidates(prev => {
+                const newData = [...prev];
+                newData[i].status = result.success ? 'success' : 'error';
+                newData[i].errorMsg = result.error || '';
+                return newData;
+            });
+
+            if (result.success) successCount++; else failCount++;
+            setProgress(Math.round(((i + 1) / queue.length) * 100));
+            
+            if (i % 5 === 0) await new Promise(r => setTimeout(r, 100));
         }
 
-        // Update Progress Bar
-        const percent = Math.round(((i + 1) / queue.length) * 100);
-        setProgress(percent);
+        setTimeout(() => {
+            if (failCount === 0) showModal('success', 'Selesai', `${successCount} transaksi berhasil diposting.`);
+            else showModal('error', 'Selesai Sebagian', `${successCount} Sukses, ${failCount} Gagal. Cek list.`);
+        }, 500);
+
+    } catch (error) {
+        showModal('error', 'Error Sistem', error.message);
+    } finally {
+        // --- BUKA KUNCI (WAJIB DI FINALLY) ---
+        isProcessingRef.current = false; // Buka Gembok Logic
+        setIsProcessing(false);          // Buka Gembok UI
     }
+  };
 
-    setIsProcessing(false);
+  // --- REVISI ICON: Biar ikonnya beda untuk Stok Awal ---
+  const getIcon = (item) => {
+      // Khusus Inventory
+      if (item.source === 'inventory_transactions') {
+          if (item.raw?.type === 'opening_stock') {
+              return <PackageOpen size={16} className="text-purple-500"/>;
+          }
+          return <Truck size={16} className="text-orange-500"/>;
+      }
 
-    // Report Akhir
-    setTimeout(() => {
-        if (failCount === 0) {
-            showModal('success', 'Selesai Sempurna! 🎉', `Berhasil memproses ${successCount} transaksi. Buku besar telah diperbarui.`, 'Mantap');
-        } else {
-            showModal('error', 'Selesai dengan Catatan ⚠️', `${successCount} Sukses, ${failCount} Gagal. Silakan cek item yang merah dan coba lagi.`, 'Cek Data');
+      switch(item.source) {
+          case 'invoices': return <FileText size={16} className="text-blue-500"/>;
+          case 'debt_payments': return <CreditCard size={16} className="text-teal-500"/>;
+          case 'debts': return <Clock size={16} className="text-amber-500"/>; // <--- TAMBAH INI
+          default: return <ShoppingBag size={16} className="text-green-500"/>;
+      }
+  };
+
+  // --- REVISI LABEL: Logika Pembeda Modal vs Beli ---
+  const getLabel = (item) => {
+        // 1. Cek Inventory
+        if (item.type === 'stock_in') {
+            if (item.raw?.type === 'opening_stock') return 'Modal Stok Awal';
+            return 'Beli Stok';
         }
-    }, 500);
-  };
+        if (item.type === 'stock_out') return 'Pakai Stok';
 
-  // Helper update state item spesifik
-  const updateCandidateStatus = (index, status, msg = '') => {
-      setCandidates(prev => {
-          const newData = [...prev];
-          newData[index] = { ...newData[index], status: status, errorMsg: msg };
-          return newData;
-      });
-  };
+        // 2. Cek Income (Pemasukan)
+        if (item.type === 'income') {
+            // Cek Kategori dari RAW data atau item category
+            const cat = item.category || '';
+            if (cat === 'Saldo Awal' || cat === 'Modal') return 'Modal';
+            if (cat === 'Hibah') return 'Pendapatan Lain';
+            return 'Penjualan'; // Default
+        }
 
-  // Helper Reset
-  const handleReset = () => {
-      setCandidates([]);
-      setProgress(0);
-  };
+        /// 3. Mapping Lainnya
+        const map = {
+            'expense': 'Pengeluaran',
+            'invoice_issued': 'Tagihan',
+            'pay_debt': 'Bayar Hutang',
+            'receive_receivable': 'Terima Piutang',
+            'transfer': 'Mutasi',
+            'new_debt': 'Hutang Baru',       
+            'new_receivable': 'Piutang Baru' 
+        };
+        return map[item.type] || item.type;
+    };
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-20 font-sans">
-      <ModalInfo {...modal} onClose={closeModal} />
+    <div className="min-h-screen bg-slate-50 pb-20 font-sans">
+      <ModalInfo {...modal} onClose={() => setModal({...modal, isOpen: false})} />
 
       {/* HEADER */}
       <div className="bg-white p-4 shadow-sm sticky top-0 z-10 flex items-center gap-3">
-        <button onClick={() => navigate('/dashboard')} className="p-2 rounded-full hover:bg-gray-100 text-gray-600">
+        <button onClick={() => navigate('/journal')} className="p-2 rounded-full hover:bg-slate-100 text-slate-600">
             <ArrowLeft size={20} />
         </button>
         <div>
-            <h1 className="text-lg font-bold text-gray-800">Proses Jurnal Otomatis</h1>
-            <p className="text-xs text-gray-500">Posting transaksi ke Buku Besar dengan AI</p>
+            <h1 className="text-lg font-bold text-slate-800">Posting Jurnal</h1>
+            <p className="text-xs text-slate-500">Integrasi 4 Sumber Data</p>
         </div>
       </div>
 
-      <div className="p-4 space-y-6">
-        
-        {/* CARD 1: FILTER & PENCARIAN */}
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
-            <div className="flex gap-3 mb-4">
-                <div className="flex-1">
-                    <label className="text-[10px] font-bold text-gray-400 uppercase mb-1 block ml-1">Dari Tanggal</label>
-                    <input type="date" value={startDate} onChange={handleStartDateChange} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold text-gray-700 outline-indigo-500"/>
-                </div>
-                <div className="flex-1">
-                    <label className="text-[10px] font-bold text-gray-400 uppercase mb-1 block ml-1">Sampai</label>
-                    <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold text-gray-700 outline-indigo-500"/>
-                </div>
+      <div className="p-4 space-y-4">
+        {/* FILTER CARD */}
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
+            <div className="flex gap-2 mb-3">
+                <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="flex-1 p-2 bg-slate-50 border rounded-lg text-xs font-bold"/>
+                <span className="self-center">-</span>
+                <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="flex-1 p-2 bg-slate-50 border rounded-lg text-xs font-bold"/>
             </div>
-
-            {/* Opsi Filter Bisnis */}
-            <div className="flex items-center gap-2 mb-4 bg-indigo-50 p-3 rounded-xl border border-indigo-100 cursor-pointer" onClick={() => setOnlyBusiness(!onlyBusiness)}>
-                <div className={`w-5 h-5 rounded flex items-center justify-center border ${onlyBusiness ? 'bg-indigo-600 border-indigo-600' : 'bg-white border-gray-300'}`}>
-                    {onlyBusiness && <CheckCircle2 size={14} className="text-white"/>}
-                </div>
-                <span className="text-xs font-bold text-indigo-800">Hanya Transaksi Bisnis (Rekomendasi)</span>
-            </div>
-
-            <button 
-                onClick={handleSearch} 
-                disabled={isProcessing} 
-                className="w-full py-3 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-200 active:scale-95 transition flex items-center justify-center gap-2 disabled:bg-gray-300 disabled:shadow-none"
-            >
-                {isProcessing ? <Loader2 className="animate-spin" size={20}/> : <Search size={20}/>}
-                {isProcessing ? 'Sedang Mencari...' : 'Cari Transaksi Pending'}
+            <button onClick={handleSearch} disabled={isProcessing} className="w-full py-2.5 bg-indigo-600 text-white font-bold rounded-lg text-sm shadow-md active:scale-95 transition flex justify-center items-center gap-2">
+                {isProcessing ? <Loader2 className="animate-spin" size={16}/> : <Search size={16}/>} Cari Data Pending
             </button>
         </div>
 
-        {/* CARD 2: LIST ANTRIAN & PROGRESS */}
+        {/* LIST */}
         {candidates.length > 0 && (
-            <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden flex flex-col max-h-[60vh]">
-                {/* Header List */}
-                <div className="p-4 bg-gray-50 border-b border-gray-100 flex justify-between items-center shrink-0">
-                    <div className="flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full bg-orange-500 animate-pulse"></span>
-                        <span className="font-bold text-gray-700 text-sm">{candidates.length} Transaksi Ditemukan</span>
-                    </div>
-                    {progress > 0 && <span className="font-bold text-indigo-600 text-sm">{progress}%</span>}
+            <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden flex flex-col max-h-[60vh]">
+                <div className="p-3 bg-slate-50 border-b flex justify-between items-center text-xs font-bold text-slate-600">
+                    <span>{candidates.length} Item Ditemukan</span>
+                    {progress > 0 && <span>{progress}%</span>}
                 </div>
+                {/* Progress Bar */}
+                <div className="h-1 bg-slate-100 w-full"><div className="h-full bg-green-500 transition-all duration-300" style={{width: `${progress}%`}}></div></div>
 
-                {/* Progress Line */}
-                <div className="h-1 bg-gray-100 w-full shrink-0">
-                    <div className="h-full bg-green-500 transition-all duration-300 ease-out" style={{width: `${progress}%`}}></div>
-                </div>
-
-                {/* Scrollable List */}
-                <div className="overflow-y-auto p-2 space-y-2 flex-1 bg-gray-50/50">
-                    {candidates.map((item) => (
-                        <div key={item.id} className={`p-3 rounded-xl border flex flex-col gap-2 transition ${item.status === 'error' ? 'bg-red-50 border-red-200' : 'bg-white border-gray-100'}`}>
+                <div className="overflow-y-auto p-2 space-y-2 flex-1">
+                    {candidates.map((item, idx) => (
+                        <div key={idx} className="flex items-center gap-3 p-3 bg-white border border-slate-100 rounded-lg shadow-sm">
+                            {/* UPDATE: Gunakan item, bukan item.source saja */}
+                            <div className="bg-slate-50 p-2 rounded-lg">{getIcon(item)}</div>
                             
-                            <div className="flex justify-between items-start">
-                                {/* Kiri */}
-                                <div>
-                                    <p className="font-bold text-gray-800 text-sm line-clamp-1">{item.merchant || item.name || 'Transaksi Tanpa Nama'}</p>
-                                    <div className="flex items-center gap-2 mt-1">
-                                        <span className="text-[10px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{new Date(item.date).toLocaleDateString('id-ID', {day:'numeric', month:'short'})}</span>
-                                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${item.allocation_type === 'BUSINESS' ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-500'}`}>
-                                            {item.allocation_type}
-                                        </span>
-                                    </div>
+                            <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                    {/* UPDATE: Panggil getLabel dengan item full object */}
+                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                                        item.raw?.type === 'opening_stock' || item.category === 'Saldo Awal'
+                                            ? 'bg-purple-100 text-purple-600' // Warna Modal (Ungu)
+                                            : item.type === 'income' 
+                                                ? 'bg-green-100 text-green-600' // Warna Penjualan (Hijau)
+                                                : 'bg-slate-100 text-slate-500' // Default (Abu)
+                                    }`}>
+                                        {getLabel(item)}
+                                    </span>
+                                    <span className="text-[10px] text-slate-400">{new Date(item.date).toLocaleDateString('id-ID')}</span>
                                 </div>
-
-                                {/* Kanan */}
-                                <div className="text-right">
-                                    <p className={`font-bold text-sm ${item.type === 'income' ? 'text-green-600' : 'text-gray-800'}`}>
-                                        {new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits:0 }).format(item.total_amount)}
-                                    </p>
-                                    
-                                    {/* Status Badge */}
-                                    <div className="mt-1 flex justify-end">
-                                        {item.status === 'idle' && <span className="text-[10px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">Menunggu</span>}
-                                        {item.status === 'processing' && <span className="text-[10px] text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full flex items-center gap-1"><Loader2 size={10} className="animate-spin"/> Proses</span>}
-                                        {item.status === 'success' && <span className="text-[10px] text-green-600 bg-green-50 px-2 py-0.5 rounded-full flex items-center gap-1"><CheckCircle2 size={10}/> Sukses</span>}
-                                        {item.status === 'skipped' && <span className="text-[10px] text-gray-500 bg-gray-200 px-2 py-0.5 rounded-full">Dilewati</span>}
-                                        {item.status === 'error' && <span className="text-[10px] text-red-600 bg-red-100 px-2 py-0.5 rounded-full flex items-center gap-1"><XCircle size={10}/> Gagal</span>}
-                                    </div>
+                                <p className="text-xs font-bold text-slate-800 truncate">{item.description}</p>
+                                <p className="text-[10px] text-slate-500 truncate">{item.category}</p>
+                            </div>
+                            <div className="text-right">
+                                <p className="text-xs font-bold text-indigo-600">{formatIDR(item.amount)}</p>
+                                <div className="flex justify-end mt-1">
+                                    {item.status === 'idle' && <span className="text-[9px] text-slate-400 bg-slate-100 px-1.5 rounded">Pending</span>}
+                                    {item.status === 'processing' && <Loader2 size={12} className="animate-spin text-indigo-500"/>}
+                                    {item.status === 'success' && <CheckCircle2 size={14} className="text-green-500"/>}
+                                    {item.status === 'error' && <XCircle size={14} className="text-red-500"/>}
                                 </div>
                             </div>
-
-                            {/* Pesan Error (Jika Ada) */}
-                            {item.status === 'error' && item.errorMsg && (
-                                <div className="bg-red-100 text-red-700 text-[10px] p-2 rounded-lg flex items-start gap-2">
-                                    <AlertCircle size={12} className="mt-0.5 shrink-0"/>
-                                    {item.errorMsg}
-                                </div>
-                            )}
                         </div>
                     ))}
                 </div>
 
-                {/* Footer Action */}
-                <div className="p-4 border-t border-gray-100 bg-white shrink-0">
-                    {/* Jika ada yang error, tombol berubah jadi "Coba Lagi yang Gagal" */}
-                    {candidates.some(c => c.status === 'error') ? (
-                        <button 
-                            onClick={handleStartProcess} 
-                            disabled={isProcessing} 
-                            className="w-full py-3 bg-orange-500 text-white font-bold rounded-xl shadow-lg active:scale-95 transition flex items-center justify-center gap-2 hover:bg-orange-600"
-                        >
-                            <Play size={20} fill="currentColor"/> Proses Ulang Yang Gagal
-                        </button>
-                    ) : (
-                        // Normal Button
-                        <button 
-                            onClick={handleStartProcess} 
-                            disabled={isProcessing || candidates.every(c => c.status === 'success' || c.status === 'skipped')} 
-                            className="w-full py-3 bg-green-600 text-white font-bold rounded-xl shadow-lg active:scale-95 transition flex items-center justify-center gap-2 hover:bg-green-700 disabled:bg-gray-300 disabled:shadow-none disabled:cursor-not-allowed"
-                        >
-                            {isProcessing ? <Loader2 className="animate-spin" size={20}/> : <Play size={20} fill="currentColor"/>}
-                            {isProcessing ? 'AI Sedang Bekerja...' : 'Mulai Posting Jurnal'}
-                        </button>
-                    )}
+                <div className="p-3 border-t bg-white">
+                    <button 
+                        onClick={handleStartProcess} 
+                        // Logic Disabled: Sedang proses ATAU Semua sudah sukses ATAU Data kosong
+                        disabled={isProcessing || candidates.every(c => c.status === 'success') || candidates.length === 0} 
+                        className={`
+                            w-full py-3 font-bold rounded-lg text-sm shadow transition flex justify-center items-center gap-2
+                            ${isProcessing || candidates.every(c => c.status === 'success') || candidates.length === 0
+                                ? 'bg-slate-300 text-slate-500 cursor-not-allowed' // Style saat Disabled
+                                : 'bg-green-600 hover:bg-green-700 text-white active:scale-95' // Style saat Aktif
+                            }
+                        `}
+                    >
+                        {isProcessing ? 'Memproses...' : 'Posting Ke Jurnal'} 
+                        {isProcessing ? <Loader2 size={16} className="animate-spin"/> : <Play size={16} fill="currentColor"/>}
+                    </button>
                 </div>
             </div>
         )}
-
       </div>
     </div>
   );

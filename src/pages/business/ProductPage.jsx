@@ -3,10 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { useAuth } from '../../context/AuthProvider';
 import ModalInfo from '../../components/ModalInfo';
-import MoneyInput from '../../components/MoneyInput';
+import MoneyInput from "../../components/MoneyInput";
+import RestockModal from './RestockModal'; // <--- [UPDATE 1] Import Modal Restock
 import { 
   ArrowLeft, Plus, Search, Package, Loader2, 
-  X, Utensils, Trash2, Camera, Edit2, Briefcase, Filter
+  X, Utensils, Trash2, Camera, Edit2, Briefcase, CheckCircle2,
+  PackagePlus // <--- [UPDATE 1] Tambah Icon PackagePlus
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -19,7 +21,8 @@ export default function ProductPage() {
   const [products, setProducts] = useState([]);
   const [ingredients, setIngredients] = useState([]); 
   const [warehouses, setWarehouses] = useState([]);   
-  const [categories, setCategories] = useState([]);   // List Kategori Unik
+  const [wallets, setWallets] = useState([]);
+  const [categories, setCategories] = useState([]);
   
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({ total: 0, retail: 0, manufacture: 0, service: 0 });
@@ -27,13 +30,16 @@ export default function ProductPage() {
   // --- FILTER ---
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('all');
-  const [filterCategory, setFilterCategory] = useState('all'); // State Filter Kategori
+  const [filterCategory, setFilterCategory] = useState('all');
 
   // --- MODAL & FORM ---
   const [showModal, setShowModal] = useState(false);
   const [formTab, setFormTab] = useState('info'); 
   const [processing, setProcessing] = useState(false);
   
+  // [UPDATE 2] State untuk Target Restock
+  const [restockTarget, setRestockTarget] = useState(null); 
+
   // Gambar
   const [imageFile, setImageFile] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
@@ -45,6 +51,10 @@ export default function ProductPage() {
   const [ingFilterType, setIngFilterType] = useState('all');
   const [selectedIngId, setSelectedIngId] = useState(null); 
   const [ingQtyInput, setIngQtyInput] = useState(''); 
+
+  // Purchase Mode (Khusus Produk Retail Baru)
+  const [isPurchaseMode, setIsPurchaseMode] = useState(false);
+  const [purchaseData, setPurchaseData] = useState({ wallet_id: '', supplier: '' });
 
   // Notif & Confirm
   const [notif, setNotif] = useState({ isOpen: false, type: 'info', title: '', message: '', onConfirm: null });
@@ -70,7 +80,6 @@ export default function ProductPage() {
           setProducts(prodData || []);
 
           if (prodData) {
-              // Ambil kategori unik & urutkan
               const uniqueCats = [...new Set(prodData.map(p => p.category).filter(Boolean))].sort();
               setCategories(uniqueCats);
               
@@ -88,6 +97,9 @@ export default function ProductPage() {
           const { data: whData } = await supabase.from('warehouses').select('id, name').eq('user_id', ownerId);
           setWarehouses(whData || []);
 
+          const { data: wlData } = await supabase.from('wallets').select('id, name, initial_balance').eq('user_id', ownerId).eq('allocation_type', 'BUSINESS');
+          setWallets(wlData || []);
+
       } catch (error) { console.error(error); } finally { setLoading(false); }
   };
 
@@ -101,6 +113,10 @@ export default function ProductPage() {
       });
       setImageFile(null);
       setImagePreview(null);
+      
+      setIsPurchaseMode(false);
+      setPurchaseData({ wallet_id: '', supplier: '' });
+
       setFormTab('info');
       setShowModal(true);
   };
@@ -109,7 +125,7 @@ export default function ProductPage() {
       setProcessing(true);
       try {
           let currentRecipes = [];
-          if (prod.product_type === 'manufacture') {
+          if (prod.product_type === 'manufacture' || prod.product_type === 'service') {
               const { data: recipeData } = await supabase
                   .from('product_recipes')
                   .select('inventory_item_id, amount_needed, inventory_items(name, unit, cost_per_unit)')
@@ -130,6 +146,7 @@ export default function ProductPage() {
           setImagePreview(prod.image_url);
           setImageFile(null);
           setFormTab('info');
+          setIsPurchaseMode(false);
           setShowModal(true);
       } catch (e) {
           showAlert('error', 'Gagal Load', e.message);
@@ -161,7 +178,6 @@ export default function ProductPage() {
       if (file) { setImageFile(file); setImagePreview(URL.createObjectURL(file)); }
   };
 
-  // --- MISSING FUNCTION ADDED HERE ---
   const openIngredientSelector = () => {
       setIngSearch('');
       setIngFilterWh('all');
@@ -207,6 +223,10 @@ export default function ProductPage() {
   const handleSubmit = async () => {
       if (!formData.name || formData.price <= 0) return showAlert('error', 'Gagal', 'Nama dan Harga Jual wajib diisi.');
       
+      if (formData.product_type === 'retail' && !formData.id && isPurchaseMode && !purchaseData.wallet_id) {
+          return showAlert('error', 'Pilih Sumber Dana', 'Karena Anda mencatat sebagai pembelian, harap pilih sumber dana.');
+      }
+
       setProcessing(true);
       try {
           let finalImageUrl = formData.image_url;
@@ -226,16 +246,86 @@ export default function ProductPage() {
               p_category: formData.category || 'Umum', p_price: parseInt(formData.price) || 0,
               p_compare_at_price: parseInt(formData.compare_at_price) || 0,
               p_cost_price: parseInt(formData.cost_price) || 0,
-              // Jasa & Racikan stoknya 0 di master produk (karena tidak dilacak atau dilacak via bahan)
               p_stock: formData.product_type === 'retail' ? (parseFloat(formData.stock) || 0) : 0,
               p_product_type: formData.product_type,
               p_recipe_yield: parseFloat(formData.recipe_yield) || 1,
               p_image_url: finalImageUrl, p_recipes: recipesJson,
-              p_product_id: formData.id || null, p_emp_id: activeEmployee?.id || null, p_pin: activeEmployee?.pin || null
+              p_product_id: formData.id || null, 
+              p_emp_id: user ? null : (activeEmployee?.id || null),
+              p_pin: user ? null : (activeEmployee?.pin || null)
           };
 
-          const { error: errRPC } = await supabase.rpc('upsert_product', payloadRPC);
+          const { data: newProdId, error: errRPC } = await supabase.rpc('upsert_product', payloadRPC);
           if (errRPC) throw errRPC;
+
+          // 2. Handle Logika Stok Awal (Purchase vs Opening Balance)
+          // Hanya jalan jika Produk Baru & Stok > 0
+          if (!formData.id && parseFloat(formData.stock) > 0) {
+              
+              const totalVal = (parseFloat(formData.stock) * parseInt(formData.cost_price));
+
+              if (isPurchaseMode) {
+                  // === SKENARIO A: BELI BARU (UANG KELUAR) ===
+                  // Jurnal: Dr. Beban/Persediaan, Cr. Kas/Bank
+                  
+                  // A. Simpan Header Expense
+                  const { data: trxData, error: trxError } = await supabase.from('transaction_headers').insert({
+                      user_id: ownerId,
+                      wallet_id: purchaseData.wallet_id,
+                      total_amount: totalVal,
+                      type: 'expense', 
+                      category: 'Pembelian Stok Retail', 
+                      description: `Stok Awal Produk: ${formData.name}`,
+                      allocation_type: 'BUSINESS',
+                      receipt_url: 'AUTO-STOCK',
+                      payment_status: 'paid',
+                      merchant: purchaseData.supplier || 'Supplier Umum'
+                  }).select().single();
+
+                  if (trxError) throw trxError;
+
+                  // B. Simpan Detail Item
+                  await supabase.from('transaction_items').insert({
+                      header_id: trxData.id,
+                      product_id: newProdId.id,
+                      name: formData.name,   
+                      qty: parseFloat(formData.stock),
+                      price: parseInt(formData.cost_price), 
+                      cost_at_sale: 0 
+                  });
+
+              } else {
+                  // === SKENARIO B: STOK LAMA / MODAL (TANPA UANG KELUAR) ===
+                  // Jurnal: Dr. Persediaan, Cr. Modal Disetor
+                  // Kita pakai tipe 'stock_in' agar Journal Worker membacanya sebagai Modal
+                  
+                  const { data: trxData, error: trxError } = await supabase.from('transaction_headers').insert({
+                      user_id: ownerId,
+                      wallet_id: null, // Tidak ada kas terlibat
+                      total_amount: totalVal,
+                      type: 'stock_in', // <--- TIPE KHUSUS
+                      category: 'Saldo Awal', 
+                      description: `Saldo Awal: ${formData.name}`,
+                      allocation_type: 'BUSINESS',
+                      receipt_url: 'OPENING-STOCK', // Penanda
+                      payment_status: 'paid',
+                      // Kita simpan flag khusus di JSON raw agar Journal Worker tau ini Modal
+                      raw: { type: 'opening_stock' } 
+                  }).select().single();
+
+                  if (trxError) throw trxError;
+
+                  // Simpan Detail Item
+                  await supabase.from('transaction_items').insert({
+                      header_id: trxData.id,
+                      product_id: newProdId.id,
+                      name: formData.name,   
+                      qty: parseFloat(formData.stock),
+                      price: parseInt(formData.cost_price), 
+                      cost_at_sale: 0 
+                  });
+              }
+          }
 
           setShowModal(false);
           fetchData();
@@ -249,7 +339,6 @@ export default function ProductPage() {
 
   const formatIDR = (num) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(num);
   
-  // LOGIC FILTER UTAMA
   const filteredProducts = products.filter(p => {
       const matchName = p.name.toLowerCase().includes(searchTerm.toLowerCase());
       const matchType = filterType === 'all' || p.product_type === filterType;
@@ -266,7 +355,9 @@ export default function ProductPage() {
         <div className="shrink-0 bg-slate-50 z-50">
             <div className="bg-orange-600 px-6 pt-6 pb-6 rounded-b-[2rem] shadow-lg relative z-10">
                 <div className="flex items-center gap-3 mb-4">
-                    <button onClick={() => navigate(activeEmployee ? '/employee-dashboard' : '/dashboard')} className="p-2 rounded-full bg-white/20 hover:bg-white/30 text-white transition backdrop-blur-sm"><ArrowLeft size={20}/></button>
+                    <button onClick={() => navigate(user ? '/dashboard' : '/employee-dashboard')} className="p-2 rounded-full bg-white/20 hover:bg-white/30 text-white transition backdrop-blur-sm">
+                        <ArrowLeft size={20}/>
+                    </button>
                     <div className="flex-1"><h1 className="text-xl font-extrabold text-white">Produk & Menu</h1><p className="text-xs text-orange-100 font-medium">Katalog Penjualan</p></div>
                     <button onClick={handleOpenAdd} className="p-2 bg-white text-orange-600 rounded-xl shadow-md hover:bg-orange-50 transition active:scale-95"><Plus size={20}/></button>
                 </div>
@@ -276,10 +367,8 @@ export default function ProductPage() {
                 </div>
             </div>
 
-            {/* FILTER BAR CONTAINER */}
+            {/* FILTER BAR */}
             <div className="px-4 -mt-4 relative z-20 mb-2 space-y-2">
-                
-                {/* 1. Filter Tipe (Retail/Jasa/Resep) */}
                 <div className="bg-white rounded-xl p-2 shadow-md border border-slate-100 flex gap-2 overflow-x-auto no-scrollbar">
                     {[
                         {id: 'all', label: `Semua (${stats.total})`},
@@ -293,7 +382,6 @@ export default function ProductPage() {
                     ))}
                 </div>
 
-                {/* 2. Filter Kategori (Makanan/Minuman/dll) */}
                 {categories.length > 0 && (
                     <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1 pl-1">
                         <button onClick={()=>setFilterCategory('all')} className={`px-3 py-1.5 rounded-full border text-[10px] font-bold whitespace-nowrap transition ${filterCategory==='all' ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-slate-500 border-slate-200'}`}>
@@ -338,6 +426,13 @@ export default function ProductPage() {
                          </div>
                      </div>
                      <div className="flex justify-end gap-2 mt-3 pt-2 border-t border-slate-50">
+                         {/* [UPDATE 3] Tombol Restock (Hanya Retail) */}
+                         {prod.product_type === 'retail' && (
+                             <button onClick={() => setRestockTarget(prod)} className="px-3 py-1.5 rounded-lg bg-teal-50 text-teal-600 hover:bg-teal-100 transition text-xs font-bold flex items-center gap-1 mr-auto">
+                                 <PackagePlus size={12}/> Stok
+                             </button>
+                         )}
+
                          <button onClick={() => handleOpenEdit(prod)} className="px-3 py-1.5 rounded-lg bg-slate-50 text-slate-500 hover:text-blue-600 hover:bg-blue-50 transition text-xs font-bold flex items-center gap-1">
                              <Edit2 size={12}/> Edit
                          </button>
@@ -350,7 +445,7 @@ export default function ProductPage() {
             }
         </div>
 
-        {/* MODAL FORM */}
+        {/* MODAL FORM & INGREDIENT SELECTOR (TETAP SAMA SEPERTI SEBELUMNYA) */}
         <AnimatePresence>
             {showModal && (
                 <div className="fixed inset-0 z-[60] bg-slate-50 flex flex-col animate-in slide-in-from-bottom duration-300">
@@ -364,7 +459,7 @@ export default function ProductPage() {
 
                     <div className="flex p-2 bg-white border-b shrink-0">
                         <button onClick={()=>setFormTab('info')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition ${formTab==='info'?'bg-slate-800 text-white':'text-slate-500 hover:bg-slate-50'}`}>Info Produk</button>
-                        {formData.product_type === 'manufacture' && (
+                        {(formData.product_type === 'manufacture' || formData.product_type === 'service') && (
                             <button onClick={()=>setFormTab('recipe')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition ${formTab==='recipe'?'bg-purple-600 text-white':'text-slate-500 hover:bg-slate-50'}`}>Resep & HPP</button>
                         )}
                     </div>
@@ -417,34 +512,71 @@ export default function ProductPage() {
 
                                 {/* LOGIC TAMPILAN SESUAI TIPE */}
                                 {formData.product_type === 'retail' && (
-                                    <div className="flex gap-3">
-                                        <div className="flex-1">
-                                            <label className="text-xs font-bold text-slate-500 mb-2 block">Stok Awal</label>
-                                            <input type="number" className="w-full p-3 bg-white border border-slate-200 rounded-xl font-bold outline-none" value={formData.stock} onChange={e=>setFormData({...formData, stock:e.target.value})}/>
+                                    <div className="space-y-3">
+                                        <div className="flex gap-3">
+                                            <div className="flex-1">
+                                                <label className="text-xs font-bold text-slate-500 mb-2 block">Stok Awal</label>
+                                                <input type="number" disabled={!!formData.id} className={`w-full p-3 border rounded-xl font-bold outline-none ${formData.id ? 'bg-slate-100 border-slate-200' : 'bg-white border-slate-200'}`} value={formData.stock} onChange={e=>setFormData({...formData, stock:e.target.value})}/>
+                                            </div>
+                                            <div className="flex-1">
+                                                <label className="text-xs font-bold text-slate-500 mb-2 block">Modal (HPP)</label>
+                                                <MoneyInput className="w-full p-3 bg-white border border-slate-200 rounded-xl font-bold outline-none" value={formData.cost_price} onChange={val=>setFormData({...formData, cost_price:val})}/>
+                                            </div>
                                         </div>
-                                        <div className="flex-1">
-                                            <label className="text-xs font-bold text-slate-500 mb-2 block">Modal (HPP)</label>
-                                            <MoneyInput className="w-full p-3 bg-white border border-slate-200 rounded-xl font-bold outline-none" value={formData.cost_price} onChange={val=>setFormData({...formData, cost_price:val})}/>
-                                        </div>
+
+                                        {!formData.id && parseFloat(formData.stock) > 0 && (
+                                            <div className={`p-4 rounded-xl border-2 transition-all duration-300 ${isPurchaseMode ? 'bg-teal-50 border-teal-200' : 'bg-slate-50 border-slate-100'}`}>
+                                                <div className="flex items-center gap-3 mb-3 cursor-pointer" onClick={() => setIsPurchaseMode(!isPurchaseMode)}>
+                                                    <div className={`w-5 h-5 rounded border flex items-center justify-center transition ${isPurchaseMode ? 'bg-teal-500 border-teal-500' : 'bg-white border-slate-300'}`}>
+                                                        {isPurchaseMode && <CheckCircle2 size={14} className="text-white"/>}
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-sm font-bold text-slate-700">Beli Pakai Kas?</p>
+                                                        <p className="text-[10px] text-slate-400">Otomatis potong saldo kas & catat pengeluaran.</p>
+                                                    </div>
+                                                </div>
+                                                {isPurchaseMode && (
+                                                    <motion.div initial={{opacity:0, height:0}} animate={{opacity:1, height:'auto'}} className="space-y-3 pt-2 border-t border-teal-100/50">
+                                                        <div>
+                                                            <label className="text-[10px] font-bold text-teal-700 mb-1 block">Sumber Dana</label>
+                                                            <select className="w-full p-2.5 bg-white rounded-lg border border-teal-200 text-xs font-bold outline-none" value={purchaseData.wallet_id} onChange={e => setPurchaseData({...purchaseData, wallet_id: e.target.value})}>
+                                                                <option value="">-- Pilih Dompet --</option>
+                                                                {wallets.map(w => <option key={w.id} value={w.id}>{w.name} (Sisa: {formatIDR(w.initial_balance)})</option>)}
+                                                            </select>
+                                                        </div>
+                                                        <div>
+                                                            <label className="text-[10px] font-bold text-teal-700 mb-1 block">Nama Supplier</label>
+                                                            <input type="text" placeholder="Cth: Agen Sembako" className="w-full p-2.5 bg-white rounded-lg border border-teal-200 text-xs font-bold outline-none" value={purchaseData.supplier} onChange={e => setPurchaseData({...purchaseData, supplier: e.target.value})} />
+                                                        </div>
+                                                    </motion.div>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
                                 )}
 
                                 {formData.product_type === 'service' && (
                                     <div>
+                                        <div className="bg-blue-50 border border-blue-100 p-3 rounded-xl mb-3">
+                                            <p className="text-xs font-bold text-blue-700 flex items-center gap-1"><Briefcase size={14}/> Fitur Jasa</p>
+                                            <p className="text-[10px] text-blue-600 mt-1">
+                                                Jasa tidak punya stok fisik. Namun jika jasa ini menggunakan bahan (cth: Shampoo, Oli), 
+                                                Anda bisa mengatur <b>Resep</b> di tab sebelah agar stok bahan otomatis berkurang saat jasa terjual.
+                                            </p>
+                                        </div>
                                         <label className="text-xs font-bold text-slate-500 mb-2 block">Estimasi Modal Jasa (Opsional)</label>
                                         <MoneyInput className="w-full p-3 bg-white border border-slate-200 rounded-xl font-bold outline-none" placeholder="Biaya Tenaga/Listrik" value={formData.cost_price} onChange={val=>setFormData({...formData, cost_price:val})}/>
-                                        <p className="text-[10px] text-slate-400 mt-1 italic">*Jasa tidak memiliki stok fisik.</p>
                                     </div>
                                 )}
                             </div>
                         ) : (
                             <div className="space-y-4">
                                 <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
-                                    <label className="text-xs font-bold text-blue-700 mb-2 block">Hasil Produksi (Yield)</label>
+                                    <label className="text-xs font-bold text-blue-700 mb-2 block">Hasil Produksi / Porsi</label>
                                     <div className="flex items-center gap-3">
-                                        <span className="text-xs text-blue-600">Resep ini untuk membuat:</span>
+                                        <span className="text-xs text-blue-600">Settingan ini untuk:</span>
                                         <input type="number" className="w-20 p-2 text-center font-bold rounded-lg border border-blue-200 outline-none text-blue-800" value={formData.recipe_yield} onChange={e=>handleYieldChange(e.target.value)}/>
-                                        <span className="text-xs font-bold text-blue-800">Porsi / Pcs</span>
+                                        <span className="text-xs font-bold text-blue-800">Porsi / Unit</span>
                                     </div>
                                 </div>
                                 <div className="bg-purple-50 p-4 rounded-xl border border-purple-100 flex justify-between items-center">
@@ -475,7 +607,6 @@ export default function ProductPage() {
             )}
         </AnimatePresence>
 
-        {/* MODAL INGREDIENT SELECTOR */}
         <AnimatePresence>
             {showIngredientModal && (
                 <div className="fixed inset-0 z-[70] bg-slate-900/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
@@ -515,7 +646,26 @@ export default function ProductPage() {
             )}
         </AnimatePresence>
 
-        <ModalInfo isOpen={notif.isOpen} type={notif.type} title={notif.title} message={notif.message} onClose={()=>setNotif({...notif, isOpen:false})} />
+        {/* [UPDATE 4] MODAL RESTOCK (COMPONENT TERPISAH) */}
+        <RestockModal 
+            isOpen={!!restockTarget} 
+            onClose={() => setRestockTarget(null)}
+            product={restockTarget}
+            ownerId={ownerId}
+            wallets={wallets}
+            onSuccess={fetchData} 
+            showNotif={showAlert} 
+        />
+
+        <ModalInfo 
+            isOpen={notif.isOpen} 
+            type={notif.type} 
+            title={notif.title} 
+            message={notif.message} 
+            onClose={() => setNotif({ ...notif, isOpen: false })} 
+            onConfirm={notif.onConfirm} 
+            confirmText={notif.confirmText}
+        />
     </div>
   );
 }

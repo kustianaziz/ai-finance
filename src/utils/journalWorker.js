@@ -1,211 +1,302 @@
 import { supabase } from '../supabaseClient';
-import Groq from "groq-sdk";
-import { getOrCreateAccount } from './accountingService'; 
+import { getOrCreateAccount } from './accountingService';
 
-// --- KONFIGURASI GROQ ---
-const API_KEY = import.meta.env.VITE_GROQ_API_KEY;
-const groq = new Groq({ apiKey: API_KEY, dangerouslyAllowBrowser: true });
-
-// Gunakan model Llama 3 70B (Versatile & Cerdas untuk Akuntansi)
-const MODEL_NAME = "llama-3.3-70b-versatile";
-
-// --- FUNGSI 1: CARI KANDIDAT TRANSAKSI ---
+// --- 1. FETCH SEMUA TRANSAKSI PENDING ---
 export const fetchUnpostedTransactions = async (userId, startDate, endDate) => {
-  const { data, error } = await supabase
-    .from('transaction_headers')
-    .select(`*, transaction_items (*)`)
-    .eq('user_id', userId)
-    .eq('is_journalized', false) 
-    .gte('date', startDate)      
-    .lte('date', endDate)        
-    .order('date', { ascending: true }); 
+  let allTransactions = [];
+  const adjustedEndDate = `${endDate}T23:59:59`;
 
-  if (error) throw error;
-  return data || [];
-};
-
-// --- FUNGSI 2: PROSES SATU TRANSAKSI ---
-export const processSingleTransaction = async (userId, trx) => {
   try {
-    // 1. Cek Ulang Data di DB (Safety Check)
-    const { data: freshTrx, error: fetchError } = await supabase
-        .from('transaction_headers')
-        .select('is_journalized, allocation_type') 
-        .eq('id', trx.id)
-        .single();
+    // A. KASIR, EXPENSE, & TRANSFER
+    const { data: trans, error: transErr } = await supabase
+      .from('transaction_headers')
+      .select(`
+        *, 
+        source_wallet:wallets!transaction_headers_wallet_id_fkey(name),
+        dest_wallet:wallets!transaction_headers_destination_wallet_id_fkey(name)
+      `) 
+      .eq('user_id', userId)
+      .eq('allocation_type', 'BUSINESS')
+      .or('is_journalized.is.null,is_journalized.eq.false')
+      .gte('date', startDate)
+      .lte('date', adjustedEndDate);
 
-    if (fetchError || !freshTrx) throw new Error("Transaksi tidak ditemukan.");
-    
-    // Kalau sudah diproses sebelumnya, skip
-    if (freshTrx.is_journalized) {
-        return { success: true, status: 'skipped', note: 'Data sudah diproses sebelumnya.' };
+    if (transErr) console.error("Error Fetch Header:", transErr);
+
+    if (trans) {
+        allTransactions.push(...trans.map(t => {
+            let desc = t.description;
+            if (!desc) {
+                if (t.type === 'income') {
+                    if (t.category === 'Saldo Awal') desc = 'Setoran Modal Awal';
+                    else if (t.category === 'Hibah') desc = 'Penerimaan Hibah';
+                    else if (t.category === 'Pelunasan Invoice') desc = 'Pelunasan Invoice';
+                    else desc = 'Penjualan Kasir';
+                } else if (t.type === 'expense') {
+                    desc = `Beban ${t.category}`;
+                } else if (t.type === 'transfer') {
+                    desc = 'Mutasi Saldo';
+                }
+            }
+        let finalType = t.type;
+            if (t.category === 'Bayar Hutang') {
+                    finalType = 'pay_debt'; // Paksa jadi pay_debt biar masuk switch case yang benar
+                } else if (t.category === 'Terima Piutang') {
+                    finalType = 'receive_receivable'; // Paksa jadi receive_receivable
+            }
+
+            return {
+                id: t.id,
+                source: 'transaction_headers',
+                date: t.date,
+                description: desc,
+                amount: t.total_amount,
+                
+                type: finalType,
+                
+                category: t.category,
+                wallet_name: t.source_wallet?.name || 'Kas Besar', 
+                dest_wallet_name: t.dest_wallet?.name || 'Kas Kecil', 
+                ref: `TRX-${t.id.substr(0,6)}`,
+                raw: t
+            };
+        }));
     }
 
-    // 2. CEK TIPE ALOKASI
-    const allocationType = trx.allocation_type || 'BUSINESS';
+    // B. [REVISI] INVOICE / PIUTANG (Hanya yang BELUM DIBAYAR)
+    // Tujuannya agar tidak double dengan 'income' Pelunasan Invoice di Header
+    const { data: inv } = await supabase
+      .from('invoices')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('status', 'unpaid') // <--- KUNCI: Hanya ambil yang benar-benar piutang murni
+      .or('is_journalized.is.null,is_journalized.eq.false')
+      .gte('issue_date', startDate)
+      .lte('issue_date', adjustedEndDate);
 
-    // --- LOGIC SKIP PRIBADI (PERSONAL) ---
-    // Transaksi 'PERSONAL' tidak perlu masuk jurnal bisnis.
-    // Kita tandai is_journalized = true agar tidak muncul lagi di antrian.
-    if (allocationType === 'PERSONAL') {
-        await supabase
-            .from('transaction_headers')
-            .update({ is_journalized: true }) 
-            .eq('id', trx.id);
-
-        return { success: true, status: 'skipped', note: 'Transaksi Pribadi (Tidak Dijurnal)' };
+    if (inv) {
+        allTransactions.push(...inv.map(i => ({
+            id: i.id,
+            source: 'invoices',
+            date: i.issue_date,
+            description: `Invoice #${i.invoice_number} - ${i.customer_name} (Piutang)`,
+            amount: i.total_amount,
+            type: 'invoice_issued',
+            category: 'Penjualan Kredit',
+            ref: `INV-${i.invoice_number}`,
+            raw: i 
+        })));
     }
 
-    // 3. AMBIL DAFTAR AKUN (COA)
-    const { data: existingCOA } = await supabase
-        .from('chart_of_accounts')
-        .select('code, name, type')
-        .eq('user_id', userId);
+    // C. INVENTORY
+    const { data: stok, error: stokErr } = await supabase
+      .from('inventory_transactions')
+      .select('*, inventory_items(name), wallets(name)') 
+      .in('type', ['in', 'restock', 'purchase', 'stock_in', 'opening_stock'])
+      .gt('price_per_unit', 0)
+      .or('is_journalized.is.null,is_journalized.eq.false')
+      .gte('created_at', startDate)
+      .lte('created_at', adjustedEndDate);
 
-    const coaListString = existingCOA.map(a => `- ${a.code} ${a.name} (${a.type})`).join('\n');
+    if (stokErr) console.error("Error Fetch Stok:", stokErr);
 
-    // 4. TANYA AI (Generate Jurnal & Deskripsi Rapih)
-    const aiJournal = await askAIForJournal(trx, coaListString);
-
-    // 5. SIMPAN HEADER JURNAL
-    const { data: jHeader, error: jhError } = await supabase
-        .from('journal_headers')
-        .insert([{
-            user_id: userId,
-            transaction_date: trx.date,
-            description: aiJournal.description, // Deskripsi hasil olahan AI
-            reference_no: `TRX-${trx.id.substring(0,8).toUpperCase()}`,
-            is_posted: true
-        }])
-        .select()
-        .single();
-
-    if (jhError) throw jhError;
-
-    // 6. SIMPAN DETAILS (Debit & Credit)
-    for (const entry of aiJournal.entries) {
-        const accountId = await getOrCreateAccount(
-            userId, 
-            entry.account, 
-            entry.type, 
-            entry.position, // 'debit' or 'credit'
-            entry.code 
-        );
-
-        await supabase.from('journal_details').insert([{
-            journal_id: jHeader.id,
-            account_id: accountId,
-            debit: entry.position === 'debit' ? entry.amount : 0,
-            credit: entry.position === 'credit' ? entry.amount : 0
-        }]);
+    if (stok) {
+        allTransactions.push(...stok.map(s => {
+            const isMasuk = s.change_amount > 0;
+            return {
+                id: s.id,
+                source: 'inventory_transactions',
+                date: s.created_at,
+                description: `${isMasuk ? 'Masuk' : 'Pakai'} Stok: ${s.inventory_items?.name}`,
+                amount: Math.abs(s.change_amount * s.price_per_unit),
+                type: isMasuk ? 'stock_in' : 'stock_out',
+                category: 'Persediaan',
+                wallet_name: s.wallets?.name, 
+                ref: `STK-${s.id.substr(0,6)}`,
+                raw: s
+            };
+        }).filter(item => item.amount > 0)); 
     }
 
-    // 7. UPDATE STATUS TRANSAKSI JADI SUDAH DIJURNAL
-    await supabase
-        .from('transaction_headers')
-        .update({ is_journalized: true })
-        .eq('id', trx.id);
+    // D. [REVISI TOTAL] HUTANG/PIUTANG MANUAL
+const { data: manualDebts } = await supabase
+  .from('debts')
+  .select('*')
+  .eq('user_id', userId)
+  // KUNCINYA: Ambil semua yang BELUM DIJURNAL, tidak peduli statusnya sudah dicicil atau belum
+  .or('is_journalized.is.null,is_journalized.eq.false') 
+  .not('description', 'ilike', 'Invoice %') 
+  .gte('created_at', startDate)
+  .lte('created_at', adjustedEndDate);
 
-    return { success: true, status: 'success' };
+if (manualDebts) {
+    allTransactions.push(...manualDebts.map(d => ({
+        id: d.id,
+        source: 'debts',
+        date: d.created_at,
+        description: `${d.type === 'payable' ? 'Hutang' : 'Piutang'} Baru: ${d.contact_name}`,
+        amount: d.amount, // Tetap ambil Nilai TOTAL Awal
+        type: d.type === 'payable' ? 'new_debt' : 'new_receivable',
+        category: 'Hutang Piutang',
+        ref: `DBT-${d.id.substr(0,6)}`,
+        raw: d
+    })));
+}
+
+    return allTransactions.sort((a, b) => new Date(a.date) - new Date(b.date));
 
   } catch (err) {
-    console.error(`Gagal ID ${trx.id}:`, err);
-    return { success: false, error: err.message };
+    console.error("Fetch Error GLOBAL:", err);
+    return [];
   }
 };
 
-// --- FUNGSI 3: PROMPT AI (GROQ VERSION) ---
-const askAIForJournal = async (trx, coaListString) => {
-    // 1. SIAPKAN DATA CONTEXT
-    const itemsDesc = trx.transaction_items?.map(i => `${i.name} (${i.price})`).join(', ') || "Item";
-    
-    const dateObj = new Date(trx.date);
-    const dateFormatted = `${String(dateObj.getDate()).padStart(2,'0')}-${String(dateObj.getMonth()+1).padStart(2,'0')}-${dateObj.getFullYear()}`;
-    
-    const allocationType = trx.allocation_type || 'BUSINESS'; // Default Business
+// --- 2. PROSES SINGLE TRANSAKSI ---
+// --- 2. PROSES SINGLE TRANSAKSI (VERSI FIX BERSIH) ---
+export const processSingleTransaction = async (userId, item) => {
+  try {
+    const details = []; 
+    let journalDesc = item.description;
 
-    // 2. SUSUN PROMPT SAKTI
-    const prompt = `
-    Act as Senior Accountant for Indonesian UMKM.
+    // 1. Buat Header Jurnal
+    const { data: journalHead, error: headErr } = await supabase
+        .from('journal_headers')
+        .insert({
+            user_id: userId,
+            transaction_date: item.date,
+            description: journalDesc,
+            reference_no: item.ref,
+            is_posted: true
+        })
+        .select().single();
 
-    TASK: Create a Journal Entry JSON based on the transaction data and available Chart of Accounts (COA).
+    if (headErr) throw headErr;
+    const jId = journalHead.id;
 
-    TRANSACTION CONTEXT:
-    - Merchant/Desc: ${trx.merchant}
-    - Total Amount: ${trx.total_amount}
-    - Date: ${dateFormatted}
-    - Items Detail: ${itemsDesc}
-    - **ALLOCATION TYPE**: ${allocationType}
+    // 2. Logic Mapping Detail
+    let debitAccName = '', debitCategory = 'ASSET';
+    let creditAccName = '', creditCategory = 'ASSET';
 
-    AVAILABLE CHART OF ACCOUNTS:
-    ${coaListString}
+    // === CASE 1: INVOICE ===
+    if (item.type === 'invoice_issued') {
+        const raw = item.raw;
+        const totalAmount = raw.total_amount;
+        const tax = raw.tax_amount || 0;
+        const discount = raw.discount_amount || 0;
+        const revenueAmount = totalAmount - tax + discount; 
 
-    ACCOUNTING RULES:
-    1. **IF ALLOCATION TYPE = 'BUSINESS'** (Standard Expense/Income):
-       - Map to the most specific Expense Account (Header 6) or Asset (Header 1).
-       - Credit is usually '1-101 Kas Tunai' or Bank.
+        // Dr. Piutang
+        details.push({ journal_id: jId, account_id: await getOrCreateAccount(userId, 'Piutang Usaha', 'ASSET'), debit: totalAmount, credit: 0 });
+        // Dr. Diskon
+        if (discount > 0) details.push({ journal_id: jId, account_id: await getOrCreateAccount(userId, 'Potongan Penjualan', 'EXPENSE'), debit: discount, credit: 0 });
+        // Cr. PPN
+        if (tax > 0) details.push({ journal_id: jId, account_id: await getOrCreateAccount(userId, 'Hutang Pajak PPN', 'LIABILITY'), debit: 0, credit: tax });
+        // Cr. Pendapatan
+        details.push({ journal_id: jId, account_id: await getOrCreateAccount(userId, 'Pendapatan Penjualan', 'REVENUE'), debit: 0, credit: revenueAmount });
 
-    2. **IF ALLOCATION TYPE = 'PRIVE'** (Owner's Personal Draw):
-       - DEBIT: '3-200 Prive / Penarikan Pemilik' (Equity reduction).
-       - CREDIT: '1-101 Kas Tunai' (Cash outflow).
-       - Do NOT use Expense accounts (Beban).
+    } else {
+        // === CASE 2: TRANSAKSI LAIN (POS, EXPENSE, TRANSFER) ===
+        switch (item.type) {
+            case 'income': 
+                // --- LOGIC POS (SPLIT JOURNAL) ---
+                const incTotal = item.amount;
+                const incTax = item.raw.tax_amount || 0;
+                const incDisc = item.raw.discount_amount || 0;
 
-    3. **IF ALLOCATION TYPE = 'SALARY'** (Owner's Salary):
-       - DEBIT: '6-101 Beban Gaji' (Operating Expense).
-       - CREDIT: '1-101 Kas Tunai'.
-       - This treats the withdrawal as a business expense.
+                // A. Cek Kategori Khusus
+                if (item.category === 'Saldo Awal' || item.category === 'Modal') {
+                    details.push({ journal_id: jId, account_id: await getOrCreateAccount(userId, item.wallet_name, 'ASSET'), debit: incTotal, credit: 0 });
+                    details.push({ journal_id: jId, account_id: await getOrCreateAccount(userId, 'Modal Disetor', 'EQUITY'), debit: 0, credit: incTotal });
+                } 
+                else if (item.category === 'Pelunasan Invoice') {
+                    details.push({ journal_id: jId, account_id: await getOrCreateAccount(userId, item.wallet_name, 'ASSET'), debit: incTotal, credit: 0 });
+                    details.push({ journal_id: jId, account_id: await getOrCreateAccount(userId, 'Piutang Usaha', 'ASSET'), debit: 0, credit: incTotal });
+                } 
+                else {
+                    // B. Penjualan POS Biasa
+                    const incRevenue = incTotal - incTax + incDisc;
 
-    4. **DESCRIPTION FORMAT**:
-       - Format: "[Category] Merchant Name - Brief Details"
-       - Example: "[Bensin] SPBU Pertamina - Isi Pertalite"
+                    // Dr. Kas/Bank
+                    details.push({ journal_id: jId, account_id: await getOrCreateAccount(userId, item.wallet_name, 'ASSET'), debit: incTotal, credit: 0 });
+                    // Dr. Diskon
+                    if (incDisc > 0) details.push({ journal_id: jId, account_id: await getOrCreateAccount(userId, 'Potongan Penjualan', 'EXPENSE'), debit: incDisc, credit: 0 });
+                    // Cr. PPN
+                    if (incTax > 0) details.push({ journal_id: jId, account_id: await getOrCreateAccount(userId, 'Hutang Pajak PPN', 'LIABILITY'), debit: 0, credit: incTax });
+                    // Cr. Pendapatan
+                    details.push({ journal_id: jId, account_id: await getOrCreateAccount(userId, 'Pendapatan Penjualan', 'REVENUE'), debit: 0, credit: incRevenue });
+                }
+                break;
 
-    OUTPUT JSON SCHEMA (Strict):
-    {
-      "description": "String",
-      "entries": [
-        { "position": "debit", "code": "X-XXX", "account": "Account Name", "type": "Type", "amount": number },
-        { "position": "credit", "code": "X-XXX", "account": "Account Name", "type": "Type", "amount": number }
-      ]
-    }
-    `;
+            case 'expense':
+                debitAccName = `Beban ${item.category}`; debitCategory = 'EXPENSE';
+                creditAccName = item.wallet_name; creditCategory = 'ASSET';
+                break;
+            case 'transfer':
+                debitAccName = item.dest_wallet_name; debitCategory = 'ASSET';
+                creditAccName = item.wallet_name; creditCategory = 'ASSET';
+                break;
+            case 'stock_in':
+                debitAccName = 'Persediaan Bahan Baku'; debitCategory = 'ASSET';
+                if (item.raw.type === 'opening_stock') { creditAccName = 'Modal Disetor'; creditCategory = 'EQUITY'; }
+                else { creditAccName = item.wallet_name || 'Kas Besar'; creditCategory = 'ASSET'; }
+                break;
+            case 'stock_out':
+                debitAccName = 'Beban Pokok Pendapatan (HPP)'; debitCategory = 'EXPENSE';
+                creditAccName = 'Persediaan Bahan Baku'; creditCategory = 'ASSET';
+                break;
+            case 'pay_debt':
+                // Debit: Hutang Dagang (Hutang Lunas)
+                debitAccName = 'Hutang Dagang'; // <--- SESUAIKAN
+                debitCategory = 'LIABILITY'; 
+                creditAccName = item.wallet_name; 
+                creditCategory = 'ASSET'; 
+                break;
+            case 'receive_receivable':
+                // Kredit: Piutang Dagang (Piutang Lunas)
+                debitAccName = item.wallet_name; 
+                debitCategory = 'ASSET'; 
+                creditAccName = 'Piutang Dagang'; // <--- SESUAIKAN
+                creditCategory = 'ASSET'; 
+                break;
+            case 'new_debt':
+                debitAccName = 'Beban Lain-lain'; // Atau 'Persediaan'
+                debitCategory = 'EXPENSE';
+                creditAccName = 'Hutang Dagang'; // <--- GANTI JADI INI (Biar jadi anak 2100)
+                creditCategory = 'LIABILITY';
+                break;
 
-    try {
-        const chatCompletion = await groq.chat.completions.create({
-            messages: [{ role: "user", content: prompt }],
-            model: MODEL_NAME,
-            temperature: 0, // Wajib 0 agar output konsisten & patuh
-            response_format: { type: "json_object" }
-        });
+            case 'new_receivable':
+                debitAccName = 'Piutang Dagang'; // <--- GANTI JADI INI (Biar jadi anak 1120)
+                debitCategory = 'ASSET';
+                creditAccName = 'Pendapatan Penjualan'; 
+                creditCategory = 'REVENUE';
+                break;
 
-        // === [UPDATED LOGGING: SETELAH AI MENJAWAB] ===
-        const usage = chatCompletion.usage; // Ambil data pemakaian token
-        if (trx.user_id) {
-            // Insert log dengan data token yang akurat
-            supabase.from('ai_logs').insert({
-                user_id: trx.user_id,
-                feature: 'AUTO_JOURNAL',
-                model: MODEL_NAME,
-                input_tokens: usage?.prompt_tokens || 0,
-                output_tokens: usage?.completion_tokens || 0,
-                total_tokens: usage?.total_tokens || 0
-            }).then(() => { /* Silent success */ }); 
+            default:
+                throw new Error(`Tipe transaksi tidak dikenal: ${item.type}`);
         }
-        // ============================================
 
-        const resultText = chatCompletion.choices[0]?.message?.content || "{}";
-        const cleanJson = resultText.replace(/```json|```/g, '').trim();
-        
-        return JSON.parse(cleanJson);
-
-    } catch (error) {
-        console.error("Groq Journal Error:", error);
-        // Fallback Manual jika AI Error
-        return {
-            description: `Manual: ${trx.merchant}`,
-            entries: [
-                { position: 'debit', code: '9-999', account: 'Uncategorized Expense', type: 'Expense', amount: trx.total_amount },
-                { position: 'credit', code: '1-101', account: 'Kas Tunai', type: 'Asset', amount: trx.total_amount }
-            ]
-        };
+        // --- SIMPLE JOURNAL FALLBACK ---
+        // Jalankan hanya jika details masih kosong (artinya bukan 'income' yang sudah di-handle di atas)
+        if (details.length === 0) {
+             const debitAccId = await getOrCreateAccount(userId, debitAccName, debitCategory);
+             const creditAccId = await getOrCreateAccount(userId, creditAccName, creditCategory);
+             details.push({ journal_id: jId, account_id: debitAccId, debit: item.amount, credit: 0 });
+             details.push({ journal_id: jId, account_id: creditAccId, debit: 0, credit: item.amount });
+        }
     }
+
+    // 3. Simpan Detail ke DB
+    const { error: detErr } = await supabase.from('journal_details').insert(details);
+    if (detErr) throw detErr;
+
+    // 4. Update Status Sumber Data
+    await supabase.from(item.source).update({ is_journalized: true }).eq('id', item.id);
+
+    return { success: true };
+
+  } catch (error) {
+    console.error("Proses Jurnal Error:", error);
+    return { success: false, error: error.message };
+  }
 };

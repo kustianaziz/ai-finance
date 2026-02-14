@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import ModalInfo from '../../components/ModalInfo';
@@ -45,8 +45,14 @@ export default function POSPage() {
   const [paymentStep, setPaymentStep] = useState('METHOD'); 
   const [selectedMethod, setSelectedMethod] = useState(''); 
   const [selectedWallet, setSelectedWallet] = useState('');
+
+  // --- State Pajak & Diskon ---
+  const [globalTaxPct, setGlobalTaxPct] = useState(0); 
+  const [globalTaxType, setGlobalTaxType] = useState('exclude');
+  const [globalDiscount, setGlobalDiscount] = useState({ type: 'nominal', value: 0 });
   
   const [processing, setProcessing] = useState(false);
+  const isTransactionPending = useRef(false);
   const [successData, setSuccessData] = useState(null);
   const [editingItem, setEditingItem] = useState(null);
 
@@ -85,6 +91,50 @@ export default function POSPage() {
     init();
   }, []);
 
+  // --- [FIX] HANDLER PICKER YANG LEBIH KETAT ---
+  const handlePickerAction = (product, action) => {
+      // 1. Cek keranjang saat ini
+      const existingIdx = cart.findIndex(i => i.id === product.id); // Gunakan 'cart' state, bukan formData
+      const currentQty = existingIdx >= 0 ? parseInt(cart[existingIdx].qty) : 0;
+
+      // 2. Tentukan Qty Baru
+      let newQty = 0;
+      if (action === 'add') newQty = currentQty + 1;
+      else if (action === 'reduce') newQty = currentQty - 1;
+      else if (action === 'set') newQty = 1;
+
+      // 3. Validasi Stok (CEGAH LEBIH DARI STOK DB)
+      if (newQty > product.stock) {
+          return showAlert('error', 'Stok Habis', `Stok tersedia hanya: ${product.stock}`);
+      }
+
+      // 4. Update Keranjang
+      if (existingIdx >= 0) {
+          if (newQty <= 0) {
+              removeCartItem(existingIdx);
+          } else {
+              updateCartItem(existingIdx, { qty: newQty });
+          }
+      } else {
+          // Add New
+          if (newQty > 0) {
+              const newItem = {
+                  id: product.id, // Pastikan ID konsisten
+                  name: product.name, 
+                  category: product.category || 'Umum',
+                  qty: newQty, 
+                  price: product.price, 
+                  cost_price: product.cost_price, // Bawa cost price
+                  product_type: product.product_type,
+                  stock: product.stock, // Simpan info stok utk validasi lanjutan jika perlu
+                  discount_type: 'nominal', discount_value: 0, 
+                  notes: ''
+              };
+              setCart(prev => [...prev, newItem]);
+          }
+      }
+  };
+
   const fetchProducts = async (storeId) => {
       setLoading(true);
       const { data } = await supabase.from('products').select('*').eq('user_id', storeId).order('name');
@@ -97,7 +147,12 @@ export default function POSPage() {
   };
 
   const fetchWallets = async (storeId) => {
-      const { data } = await supabase.from('wallets').select('id, name, type').eq('user_id', storeId);
+      const { data } = await supabase
+        .from('wallets')
+        .select('id, name, type')
+        .eq('user_id', storeId)
+        .eq('allocation_type', 'BUSINESS'); // <--- FILTER PENTING INI
+      
       if (data) {
           const mapped = data.map(w => ({ ...w, type: (w.type || 'cash').toLowerCase() }));
           setWallets(mapped);
@@ -109,9 +164,31 @@ export default function POSPage() {
       if (!session) return;
       setProcessing(true);
       try {
-          const { data, error } = await supabase.rpc('get_open_bills', { p_store_id: session.storeId });
+          const { data, error } = await supabase
+              .from('open_bills')
+              .select(`
+                  *,
+                  items:open_bill_items(*)
+              `)
+              .eq('user_id', session.storeId)
+              .order('created_at', { ascending: false });
+
           if (error) throw error;
-          setOpenBills(data || []);
+          
+          // --- [FIX] MAPPING DATA AGAR UI BACA 'name' ---
+          const mappedData = data.map(b => ({
+              ...b,
+              customer: b.customer_name,
+              total: b.total_amount,
+              date: b.created_at,
+              items: b.items.map(i => ({
+                  ...i,
+                  name: i.product_name, // <--- INI KUNCINYA (Mapping product_name ke name)
+                  qty: i.qty
+              }))
+          }));
+
+          setOpenBills(mappedData || []);
           setOpenBillSearch(''); 
           setShowOpenBillsModal(true);
       } catch (e) {
@@ -126,12 +203,17 @@ export default function POSPage() {
       setProcessing(true);
       try {
           const { data, error } = await supabase
-              .from('transaction_headers')
-              .select(`id, total_amount, payment_method, merchant, created_at, tax_amount, employee_id, transaction_items ( id, name, qty, price )`)
-              .eq('user_id', session.storeId)
-              .eq('type', 'income')
-              .order('created_at', { ascending: false })
-              .limit(20);
+            .from('transaction_headers')
+            .select(`
+                id, total_amount, payment_method, merchant, created_at, 
+                tax_amount, discount_amount, tax_type, 
+                employee_id, transaction_items ( id, name, qty, price )
+            `) // Added discount_amount, tax_type
+            .eq('user_id', session.storeId)
+            .eq('type', 'income')
+            .eq('receipt_url', 'POS')
+            .order('created_at', { ascending: false })
+            .limit(20);
 
           if (error) throw error;
           setHistoryTrx(data || []);
@@ -163,38 +245,142 @@ export default function POSPage() {
 
   // --- LOGIC ---
   const handleRecallBill = (bill) => {
+      // 1. Restore Cart Items
       const recalledCart = bill.items.map(item => ({
-          id: item.product_id, name: item.name, price: Number(item.price), cost_price: Number(item.cost), qty: Number(item.qty), product_type: item.type, image_url: item.image_url, notes: item.notes || '' 
+          id: item.product_id, 
+          name: item.product_name || item.name, // Handle beda nama kolom
+          price: Number(item.price), 
+          cost_price: Number(item.cost), 
+          qty: Number(item.qty), 
+          product_type: item.product_type, 
+          notes: item.notes || '',
+          
+          // Restore Diskon Item
+          discount_type: item.discount_type || 'nominal',
+          discount_value: item.discount_value || 0
       }));
       setCart(recalledCart);
-      setCustomerName(bill.customer === 'Pelanggan Umum' ? '' : bill.customer);
+
+      // 2. Restore Global Settings
+      setCustomerName(bill.customer_name === 'Pelanggan Umum' ? '' : bill.customer_name);
+      
+      // Pajak
+      setGlobalTaxType(bill.tax_type || 'exclude');
+      setGlobalTaxPct(bill.tax_percent || 0);
+      
+      // Diskon Global
+      setGlobalDiscount({
+          type: bill.global_discount_type || 'nominal',
+          value: bill.global_discount_value || 0
+      });
+
       setActiveBillId(bill.id); 
       setShowOpenBillsModal(false);
-      setShowCartMobile(true); 
+      
+      // Logic UX: Jika di HP langsung buka cart
+      if (window.innerWidth < 768) setShowCartMobile(true);
   };
 
   const handleReprint = (trx) => {
-      setSuccessData({
-          id: trx.id, total: trx.total_amount, tax: trx.tax_amount || 0, items: trx.transaction_items || [], status: 'paid',
-          date: new Date(trx.created_at), storeName: session.storeName, cashier: session.name, method: trx.payment_method
-      });
-      // UPDATE: Tutup modal history agar langsung fokus ke struk
-      setShowHistoryModal(false);
-  };
+    // Re-construct values from transaction header
+    const total = trx.total_amount || 0;
+    const tax = trx.tax_amount || 0;
+    const discount = trx.discount_amount || 0; // Ensure you fetch this column in fetchHistory!
+    
+    // Back-calculate subtotal for display
+    // GrandTotal = Subtotal - Discount + Tax
+    // Subtotal = GrandTotal + Discount - Tax
+    const subtotal = total + discount - tax;
+
+    setSuccessData({
+        id: trx.id,
+        
+        // --- DATA UTAMA ---
+        items: trx.transaction_items || [],
+        status: 'paid', // Or trx.payment_status if you have it
+        date: new Date(trx.created_at),
+        storeName: session.storeName,
+        cashier: session.name, // Or trx.employee_id if you want true history
+        method: trx.payment_method,
+
+        // --- RINCIAN KEUANGAN (Mapped from DB columns) ---
+        subtotal: subtotal,
+        discountTotal: discount,
+        taxTotal: tax,
+        grandTotal: total,
+
+        // --- INFO TAMBAHAN (If saved, otherwise defaults) ---
+        taxType: trx.tax_type || 'exclude', // Ensure you fetch this
+        taxPct: 0, // We might not have this stored unless added to DB, set 0 or calculate if possible
+        globalDiscount: { type: 'nominal', value: discount } // Approximation
+    });
+    
+    setShowHistoryModal(false);
+};
 
   const addToCart = (product) => {
       setCart(prev => {
           const existIdx = prev.findIndex(item => item.id === product.id && !item.notes);
+          
           if (existIdx >= 0) {
-              const newCart = [...prev]; newCart[existIdx].qty += 1; return newCart;
+              // Cek Stok Sebelum Nambah
+              if (prev[existIdx].qty + 1 > product.stock) {
+                  showAlert('error', 'Stok Penuh', `Maksimal stok: ${product.stock}`);
+                  return prev; // Balikin array lama tanpa perubahan
+              }
+              
+              const newCart = [...prev]; 
+              newCart[existIdx].qty += 1; 
+              return newCart;
           }
+          
+          // Cek Stok Awal (Harusnya gak mungkin 0 kalau tampil, tapi jaga-jaga)
+          if (product.stock < 1) {
+               showAlert('error', 'Habis', 'Stok produk ini kosong.');
+               return prev;
+          }
+
           return [...prev, { ...product, qty: 1, notes: '' }];
       });
   };
 
   const updateCartItem = (idx, updates) => setCart(prev => prev.map((item, i) => i === idx ? { ...item, ...updates } : item));
   const removeCartItem = (idx) => setCart(prev => prev.filter((_, i) => i !== idx));
-  const calculateTotal = () => cart.reduce((acc, item) => acc + (item.price * item.qty), 0);
+  // --- Kalkulasi Total dengan Diskon & Pajak ---
+  const calculation = () => {
+      const subtotal = cart.reduce((acc, item) => acc + (item.price * item.qty), 0);
+      
+      // 1. Hitung Diskon
+      let discountAmount = 0;
+      if (globalDiscount.type === 'percent') {
+          const pct = Math.min(parseFloat(globalDiscount.value) || 0, 100);
+          discountAmount = subtotal * (pct / 100);
+      } else {
+          discountAmount = Math.min(parseFloat(globalDiscount.value) || 0, subtotal);
+      }
+
+      // 2. Hitung Pajak (Net Sales = Subtotal - Diskon)
+      const netSales = subtotal - discountAmount;
+      const taxRate = parseFloat(globalTaxPct) || 0;
+      
+      let taxAmount = 0;
+      let grandTotal = 0;
+
+      if (globalTaxType === 'include') {
+          // Include: Pajak sudah ada di dalam Net Sales
+          // Tax = Net - (Net / (1 + Rate/100))
+          taxAmount = netSales - (netSales / (1 + (taxRate / 100)));
+          grandTotal = netSales; // Customer bayar angka Net itu
+      } else {
+          // Exclude: Pajak ditambah di atas Net Sales
+          taxAmount = netSales * (taxRate / 100);
+          grandTotal = netSales + taxAmount;
+      }
+
+      return { subtotal, discountAmount, taxAmount, grandTotal };
+  };
+
+  const calc = calculation();
 
   // --- CHECKOUT ---
   const openPaymentModal = () => {
@@ -231,20 +417,59 @@ export default function POSPage() {
           if (!session?.storeId) throw new Error("Sesi toko hilang.");
           if (activeBillId) await supabase.from('open_bills').delete().eq('id', activeBillId);
 
+          // 1. Ambil Kalkulasi Terbaru
+          const { subtotal, discountAmount, taxAmount, grandTotal } = calculation();
+
+          // 2. Simpan Header dengan Data Lengkap
           const { data: billData, error: billError } = await supabase.from('open_bills').insert({
-              user_id: session.storeId, customer_name: customerName || 'Pelanggan Umum', total_amount: Math.round(calculateTotal())
+              user_id: session.storeId, 
+              customer_name: customerName || 'Pelanggan Umum', 
+              
+              // Nominal Akhir
+              subtotal: Math.round(subtotal),
+              tax_amount: Math.round(taxAmount),
+              discount_amount: Math.round(discountAmount),
+              total_amount: Math.round(grandTotal),
+              
+              // Settingan (PENTING UNTUK RECALL)
+              tax_type: globalTaxType,
+              tax_percent: parseFloat(globalTaxPct) || 0,
+              global_discount_type: globalDiscount.type,
+              global_discount_value: parseFloat(globalDiscount.value) || 0
+
           }).select().single();
 
           if (billError) throw billError;
 
-          const itemsToInsert = cart.map(item => ({
-              bill_id: billData.id, product_id: item.id, product_name: item.name, price: Math.floor(Number(item.price)),
-              cost: Math.floor(Number(item.cost_price) || 0), qty: Number(item.qty), product_type: item.product_type || 'retail', notes: item.notes || ''
-          }));
+          // 3. Simpan Items dengan Diskon per Item
+          const itemsToInsert = cart.map(item => {
+              // Hitung total per baris (Net)
+              const base = item.price * item.qty;
+              let disc = 0;
+              if (item.discount_type === 'percent') disc = base * (item.discount_value / 100);
+              else disc = Math.min(item.discount_value, base);
+              
+              return {
+                  bill_id: billData.id, 
+                  product_id: item.id, 
+                  product_name: item.name, 
+                  price: Math.floor(Number(item.price)),
+                  cost: Math.floor(Number(item.cost_price) || 0), 
+                  qty: Number(item.qty), 
+                  product_type: item.product_type || 'retail', 
+                  notes: item.notes || '',
+                  
+                  // Simpan Diskon Item
+                  discount_type: item.discount_type || 'nominal',
+                  discount_value: item.discount_value || 0,
+                  total: Math.round(base - disc)
+              };
+          });
 
           const { error: itemsError } = await supabase.from('open_bill_items').insert(itemsToInsert);
           if (itemsError) throw itemsError;
 
+          // 4. Update Stok
           for (const item of cart) {
               if (item.product_type === 'retail') await supabase.rpc('decrement_stock', { row_id: item.id, quantity: item.qty });
           }
@@ -259,21 +484,46 @@ export default function POSPage() {
   };
 
   const handleProcessTransaction = async (status, method, walletId) => {
-      setProcessing(true);
+      // 1. CEK GEMBOK (Cegah Double Click)
+      if (isTransactionPending.current) return;
+      
+      // 2. KUNCI PINTU
+      isTransactionPending.current = true;
+      setProcessing(true); // Update UI jadi loading
+
       try {
           if (!session?.storeId) throw new Error("Sesi toko hilang.");
           if (status === 'paid' && !walletId && method !== 'CASH') throw new Error("Pilih Wallet dulu.");
           if (activeBillId) await supabase.from('open_bills').delete().eq('id', activeBillId);
 
+          // Ambil Kalkulasi
+          const { subtotal, grandTotal, taxAmount, discountAmount } = calculation();
+
+          // A. Insert Header
           const { data: trxData, error: trxError } = await supabase.from('transaction_headers').insert({
-              user_id: session.storeId, wallet_id: walletId || null, merchant: customerName || 'Pelanggan Umum',
-              total_amount: Math.round(calculateTotal()), tax_amount: 0, type: 'income', category: 'Penjualan',
-              allocation_type: 'BUSINESS', description: 'Transaksi POS', payment_method: method,
-              payment_status: 'paid', employee_id: session.role === 'Pemilik' ? null : session.id
+              user_id: session.storeId, 
+              wallet_id: walletId || null, 
+              merchant: customerName || 'Pelanggan Umum',
+              
+              total_amount: Math.round(grandTotal), 
+              tax_amount: Math.round(taxAmount),
+              discount_amount: Math.round(discountAmount),
+              tax_type: globalTaxType,
+              
+              type: 'income', 
+              category: 'Penjualan',
+              allocation_type: 'BUSINESS', 
+              description: 'Transaksi POS', 
+              receipt_url: 'POS',
+              
+              payment_method: method,
+              payment_status: 'paid', 
+              employee_id: session.role === 'Pemilik' ? null : session.id
           }).select().single();
 
           if (trxError) throw trxError;
 
+          // B. Insert Items
           const itemsToInsert = cart.map(item => ({
               header_id: trxData.id, product_id: item.id, name: item.notes ? `${item.name} (${item.notes})` : item.name,
               price: Math.floor(Number(item.price)), qty: Number(item.qty), cost_at_sale: Math.floor(Number(item.cost_price) || 0),
@@ -283,25 +533,43 @@ export default function POSPage() {
           const { error: itemsError } = await supabase.from('transaction_items').insert(itemsToInsert);
           if (itemsError) throw itemsError;
 
+          // C. Update Stok
           if (!activeBillId) { 
               for (const item of cart) {
                   if (item.product_type === 'retail') await supabase.rpc('decrement_stock', { row_id: item.id, quantity: item.qty });
               }
           }
 
-          if (status === 'paid' && walletId) {
-              await supabase.rpc('increment_wallet_balance', { p_wallet_id: walletId, p_amount: Math.round(calculateTotal()) });
-          }
-
           setSuccessData({
-              id: trxData.id, total: calculateTotal(), items: cart, status: 'paid',
-              date: new Date(), storeName: session.storeName, cashier: session.name, method: method
+              id: trxData.id, 
+              
+              // --- DATA UTAMA ---
+              items: cart, 
+              status: 'paid',
+              date: new Date(), 
+              storeName: session.storeName, 
+              cashier: session.name, 
+              method: method,
+
+              // --- RINCIAN KEUANGAN (Ambil dari calculation) ---
+              subtotal: Math.round(subtotal),
+              discountTotal: Math.round(discountAmount),
+              taxTotal: Math.round(taxAmount),
+              grandTotal: Math.round(grandTotal),
+              
+              // --- INFO TAMBAHAN ---
+              taxType: globalTaxType,
+              taxPct: globalTaxPct,
+              globalDiscount: globalDiscount
           });
           resetState();
+
       } catch (e) {
           console.error("Payment Error:", e);
           showAlert('error', 'Gagal Bayar', e.message);
       } finally {
+          // 3. BUKA GEMBOK (Wajib di Finally)
+          isTransactionPending.current = false;
           setProcessing(false);
       }
   };
@@ -376,12 +644,31 @@ export default function POSPage() {
                </div>
               }
           </div>
-          <div className="md:hidden absolute bottom-0 left-0 w-full p-4 bg-gradient-to-t from-slate-100 via-slate-100 to-transparent z-40"><button onClick={() => setShowCartMobile(true)} className="w-full bg-slate-900 text-white p-4 rounded-2xl font-bold flex justify-between items-center shadow-xl shadow-slate-400/20 active:scale-95 transition"><div className="flex items-center gap-3"><div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center text-sm font-bold">{cart.reduce((a,b)=>a+b.qty,0)}</div><span className="text-sm">Keranjang</span></div><span className="text-lg font-extrabold">{formatIDR(calculateTotal())}</span></button></div>
+          <div className="md:hidden absolute bottom-0 left-0 w-full p-4 bg-gradient-to-t from-slate-100 via-slate-100 to-transparent z-40"><button onClick={() => setShowCartMobile(true)} className="w-full bg-slate-900 text-white p-4 rounded-2xl font-bold flex justify-between items-center shadow-xl shadow-slate-400/20 active:scale-95 transition"><div className="flex items-center gap-3"><div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center text-sm font-bold">{cart.reduce((a,b)=>a+b.qty,0)}</div><span className="text-sm">Keranjang</span></div><span className="text-lg font-extrabold">{formatIDR(calc.grandTotal)}</span></button></div>
       </div>
 
       {/* KANAN */}
       <div className="hidden md:flex w-96 bg-white flex-col h-full shadow-2xl z-20 border-l border-slate-100">
-          <CartSection cart={cart} updateCartItem={updateCartItem} removeCartItem={removeCartItem} total={calculateTotal()} onCheckout={openPaymentModal} processing={processing} onEditItem={setEditingItem} customerName={customerName} setCustomerName={setCustomerName} onOpenBills={fetchOpenBills} onHistory={fetchHistory} />
+          <CartSection 
+            cart={cart} 
+            updateCartItem={updateCartItem} 
+            removeCartItem={removeCartItem} 
+            
+            // UPDATE BAGIAN INI
+            calc={calc} 
+            globalTaxPct={globalTaxPct} setGlobalTaxPct={setGlobalTaxPct}
+            globalDiscount={globalDiscount} setGlobalDiscount={setGlobalDiscount}
+            globalTaxType={globalTaxType} setGlobalTaxType={setGlobalTaxType}
+            // ----------------
+            
+            onCheckout={openPaymentModal} 
+            processing={processing} 
+            onEditItem={setEditingItem} 
+            customerName={customerName} 
+            setCustomerName={setCustomerName} 
+            onOpenBills={fetchOpenBills} 
+            onHistory={fetchHistory} 
+        />
       </div>
 
       {/* MOBILE CART */}
@@ -389,7 +676,28 @@ export default function POSPage() {
           {showCartMobile && (
               <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} className="md:hidden fixed inset-0 z-50 bg-white flex flex-col h-full">
                   <div className="p-4 border-b flex justify-between items-center shadow-sm shrink-0"><h2 className="font-extrabold text-xl text-slate-800">Pesanan</h2><button onClick={()=>setShowCartMobile(false)} className="p-2 bg-slate-100 rounded-full"><ChevronDown size={24}/></button></div>
-                  <div className="flex-1 overflow-hidden"><CartSection cart={cart} updateCartItem={updateCartItem} removeCartItem={removeCartItem} total={calculateTotal()} onCheckout={openPaymentModal} processing={processing} onEditItem={setEditingItem} customerName={customerName} setCustomerName={setCustomerName} onOpenBills={fetchOpenBills} onHistory={fetchHistory}/></div>
+                  <div className="flex-1 overflow-hidden">
+                    <CartSection 
+                        cart={cart} 
+                        updateCartItem={updateCartItem} 
+                        removeCartItem={removeCartItem} 
+                        
+                        // UPDATE BAGIAN INI JUGA
+                        calc={calc} 
+                        globalTaxPct={globalTaxPct} setGlobalTaxPct={setGlobalTaxPct}
+                        globalDiscount={globalDiscount} setGlobalDiscount={setGlobalDiscount}
+                        globalTaxType={globalTaxType} setGlobalTaxType={setGlobalTaxType}
+                        // ---------------------
+
+                        onCheckout={openPaymentModal} 
+                        processing={processing} 
+                        onEditItem={setEditingItem} 
+                        customerName={customerName} 
+                        setCustomerName={setCustomerName} 
+                        onOpenBills={fetchOpenBills} 
+                        onHistory={fetchHistory}
+                    />
+                </div>
               </motion.div>
           )}
       </AnimatePresence>
@@ -429,7 +737,36 @@ export default function POSPage() {
                       ) : (
                           <div className="space-y-4">
                               <p className="text-sm text-slate-500">Pilih akun penerima untuk {selectedMethod}:</p>
-                              {getFilteredWallets().length === 0 ? <div className="text-center py-6 bg-slate-50 rounded-xl border border-dashed border-slate-200"><AlertTriangle className="mx-auto text-orange-400 mb-2"/><p className="text-xs font-bold text-slate-500">Belum ada wallet Bank/E-Wallet.</p></div> : <div className="space-y-2 max-h-60 overflow-y-auto">{getFilteredWallets().map(w => (<button key={w.id} onClick={() => handleProcessTransaction('paid', selectedMethod, w.id)} className="w-full p-4 bg-slate-50 rounded-xl border border-slate-200 flex items-center gap-3 hover:border-indigo-500 hover:bg-indigo-50 transition"><Wallet size={18} className="text-slate-400"/><span className="font-bold text-slate-700">{w.name}</span></button>))}</div>}
+                              {getFilteredWallets().length === 0 ? (
+                                    <div className="text-center py-6 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                                        <AlertTriangle className="mx-auto text-orange-400 mb-2"/>
+                                        <p className="text-xs font-bold text-slate-500">Belum ada wallet Bank/E-Wallet.</p>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-2 max-h-60 overflow-y-auto">
+                                        {getFilteredWallets().map(w => (
+                                            <button 
+                                                key={w.id} 
+                                                // --- [UPDATE] Tambahkan Disabled & Handler ---
+                                                disabled={processing} // Matikan tombol jika sedang processing
+                                                onClick={() => handleProcessTransaction('paid', selectedMethod, w.id)} 
+                                                className={`
+                                                    w-full p-4 rounded-xl border flex items-center gap-3 transition relative overflow-hidden
+                                                    ${processing 
+                                                        ? 'bg-slate-100 border-slate-200 opacity-50 cursor-not-allowed' // Style saat Loading
+                                                        : 'bg-slate-50 border-slate-200 hover:border-indigo-500 hover:bg-indigo-50' // Style Normal
+                                                    }
+                                                `}
+                                            >
+                                                {/* Tampilkan Loading Spinner di tombol yang sedang diklik (Opsional, tapi bagus) */}
+                                                {processing && <div className="absolute inset-0 bg-white/50 flex items-center justify-center"><Loader2 className="animate-spin text-indigo-600" size={20}/></div>}
+                                                
+                                                <Wallet size={18} className="text-slate-400"/>
+                                                <span className="font-bold text-slate-700">{w.name}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
                               <button onClick={() => setPaymentStep('METHOD')} className="text-xs text-slate-400 font-bold underline w-full text-center">Kembali</button>
                           </div>
                       )}
@@ -467,40 +804,159 @@ export default function POSPage() {
           )}
       </AnimatePresence>
 
-      {/* --- AREA CETAK STRUK (TERSEMBUNYI TAPI SIAP CETAK) --- */}
-      {successData && (
-          <div className="print-area-wrapper">
-              <div className="w-[58mm] mx-auto text-black font-mono text-[10px] leading-tight text-center">
-                  <div className="font-bold text-sm mb-1">{successData.storeName}</div>
-                  <div className="mb-2">{new Date(successData.date).toLocaleString()}</div>
-                  <div className="mb-2">Kasir: {successData.cashier}</div>
-                  <div className="border-b border-black border-dashed my-1"></div>
-                  {successData.items.map((i,idx) => (
-                      <div key={idx} className="flex justify-between text-left mb-1"><div className="w-[60%]">{i.qty}x {i.name.substring(0, 20)}</div><div className="w-[40%] text-right">{formatIDR(i.price * i.qty)}</div></div>
-                  ))}
-                  <div className="border-b border-black border-dashed my-1"></div>
-                  <div className="flex justify-between font-bold text-sm mt-1"><span>TOTAL</span><span>{formatIDR(successData.total)}</span></div>
-                  <div className="mt-2 text-center font-bold">{successData.status === 'paid' ? 'LUNAS' : 'OPEN BILL'} ({successData.method})</div>
-                  <div className="mt-4 text-center">Terima Kasih</div>
-              </div>
-          </div>
-      )}
+      {/* --- AREA CETAK STRUK (UPDATED & FIXED) --- */}
+   {successData && (
+       <div className="print-area-wrapper">
+           <div className="w-[58mm] mx-auto text-black font-mono text-[10px] leading-tight text-center pb-10">
+               
+               {/* HEADER */}
+               <div className="font-bold text-sm mb-1">{successData.storeName}</div>
+               <div className="mb-1">{new Date(successData.date).toLocaleString('id-ID')}</div>
+               <div className="mb-2">Kasir: {successData.cashier}</div>
+               <div className="border-b border-black border-dashed my-1"></div>
+
+               {/* ITEM LIST */}
+               <div className="text-left">
+                   {successData.items.map((i, idx) => {
+                       const price = Number(i.price) || 0;
+                       const qty = Number(i.qty) || 0;
+                       const basePrice = price * qty;
+                       
+                       let itemDisc = 0;
+                       // Handle discount display safely
+                       if (i.discount_type === 'percent') {
+                           itemDisc = basePrice * ((Number(i.discount_value) || 0) / 100);
+                       } else {
+                           itemDisc = Math.min((Number(i.discount_value) || 0), basePrice);
+                       }
+                       
+                       return (
+                           <div key={idx} className="mb-1">
+                               {/* Nama Barang */}
+                               <div>{i.name.substring(0, 35)}</div>
+                               
+                               {/* Qty x Harga ...... Total */}
+                               <div className="flex justify-between">
+                                   <div>{qty} x {formatIDR(price)}</div>
+                                   <div>{formatIDR(basePrice)}</div>
+                               </div>
+
+                               {/* Info Diskon Item (Jika ada) */}
+                               {itemDisc > 0 && (
+                                   <div className="flex justify-between text-[9px] italic">
+                                       <div>(Disc {i.discount_type === 'percent' ? `${i.discount_value}%` : ''})</div>
+                                       <div>-{formatIDR(itemDisc)}</div>
+                                   </div>
+                               )}
+                           </div>
+                       );
+                   })}
+               </div>
+
+               <div className="border-b border-black border-dashed my-1"></div>
+
+               {/* SUMMARY */}
+               <div className="flex justify-between mt-1">
+                   <span>Subtotal</span>
+                   <span>{formatIDR(successData.subtotal || 0)}</span>
+               </div>
+
+               {/* Total Diskon */}
+               {(successData.discountTotal > 0) && (
+                   <div className="flex justify-between">
+                       <span>Diskon</span>
+                       <span>-{formatIDR(successData.discountTotal)}</span>
+                   </div>
+               )}
+
+               {/* Pajak */}
+               {(successData.taxTotal > 0) && (
+                   <div className="flex justify-between">
+                       <span>Pajak {successData.taxType === 'include' ? '(Incl)' : ''}</span>
+                       <span>{formatIDR(successData.taxTotal)}</span>
+                   </div>
+               )}
+
+               {/* GRAND TOTAL */}
+               <div className="flex justify-between font-bold text-sm mt-2 pt-1 border-t border-black border-dashed">
+                   <span>TOTAL</span>
+                   <span>{formatIDR(successData.grandTotal || 0)}</span>
+               </div>
+
+               {/* FOOTER */}
+               <div className="mt-2 text-center font-bold uppercase">
+                   {successData.status === 'paid' ? 'LUNAS' : 'OPEN BILL'} ({successData.method})
+               </div>
+               <div className="mt-4 text-center">Terima Kasih</div>
+               <div className="text-[8px] mt-1 text-slate-500">Powered by V10 System</div>
+           </div>
+       </div>
+   )}
     </div>
   );
 }
 
-const CartSection = ({ cart, updateCartItem, removeCartItem, total, onCheckout, processing, onEditItem, customerName, setCustomerName, onOpenBills, onHistory }) => (
+    const CartSection = ({ 
+    cart, updateCartItem, removeCartItem, 
+    calc, // Terima hasil kalkulasi
+    globalTaxPct, setGlobalTaxPct, 
+    globalTaxType, setGlobalTaxType,
+    globalDiscount, setGlobalDiscount, 
+    onCheckout, // <--- FOKUS DISINI: Kita pakai props ini
+    processing, onEditItem, customerName, setCustomerName, onOpenBills, onHistory 
+}) => (
     <div className="flex flex-col h-full bg-slate-50">
         <div className="p-4 bg-white border-b flex justify-between items-center shadow-sm shrink-0">
             <input type="text" placeholder="Nama Pelanggan" className="bg-slate-100 px-3 py-2 rounded-lg text-xs w-2/5 outline-none border border-transparent focus:border-indigo-500 focus:bg-white transition" value={customerName} onChange={e=>setCustomerName(e.target.value)}/>
             <div className="flex gap-2"><button onClick={onHistory} className="text-slate-500 text-xs font-bold flex items-center gap-1 hover:bg-slate-100 p-2 rounded-lg transition"><History size={14}/> Riwayat</button><button onClick={onOpenBills} className="text-orange-600 text-xs font-bold flex items-center gap-1 hover:bg-orange-50 p-2 rounded-lg transition"><Receipt size={14}/> Open Bill</button></div>
         </div>
+        
         <div className="flex-1 overflow-y-auto p-4 space-y-3 pb-6">
             {cart.length === 0 ? <div className="flex flex-col items-center justify-center h-full text-slate-400 select-none"><ShoppingCart size={48} className="mb-2 opacity-20"/><p className="text-sm font-medium opacity-50">Kosong</p></div> : cart.map((item, idx) => (<div key={idx} className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex gap-3 group relative items-start"><div className="flex-1 min-w-0 cursor-pointer pr-6" onClick={() => onEditItem(idx)}><h4 className="font-bold text-slate-800 text-sm truncate">{item.name}</h4><div className="flex justify-between items-center"><span className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-500 font-bold">x{item.qty}</span><p className="text-xs font-bold text-indigo-600">{formatIDR(item.price * item.qty)}</p></div>{item.notes && <p className="text-[10px] text-orange-500 italic mt-1 truncate"><Edit3 size={8}/> {item.notes}</p>}</div><button onClick={(e) => {e.stopPropagation(); removeCartItem(idx);}} className="absolute top-2 right-2 p-1.5 text-slate-300 hover:text-red-500"><X size={14}/></button></div>))}
         </div>
-        <div className="p-5 bg-white border-t border-slate-200 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] z-20 shrink-0 pb-8 md:pb-5">
-            <div className="flex justify-between items-end mb-4"><span className="text-slate-500 text-xs font-bold uppercase">Total</span><span className="text-2xl font-extrabold text-slate-900">{formatIDR(total)}</span></div>
-            <button onClick={onCheckout} disabled={cart.length === 0 || processing} className="w-full py-4 bg-slate-900 text-white rounded-xl font-bold shadow-lg hover:bg-slate-800 disabled:opacity-50 active:scale-95 transition flex justify-center items-center gap-2">{processing ? <Loader2 className="animate-spin" size={20}/> : "Proses Pembayaran"}</button>
+
+        {/* FOOTER TOTAL & CHECKOUT */}
+        <div className="p-4 bg-white border-t border-slate-200 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] z-20 shrink-0 space-y-3">
+            
+            {/* Input Diskon */}
+            <div className="flex justify-between items-center text-xs">
+                <span className="font-bold text-slate-500">Diskon</span>
+                <div className="flex items-center gap-1">
+                    <button onClick={() => setGlobalDiscount({ ...globalDiscount, type: globalDiscount.type === 'nominal' ? 'percent' : 'nominal' })} className="bg-slate-100 px-2 py-1 rounded font-bold text-slate-600 hover:bg-slate-200 w-8">{globalDiscount.type === 'percent' ? '%' : 'Rp'}</button>
+                    <input type="number" className="w-20 text-right bg-slate-50 border border-slate-200 rounded px-2 py-1 outline-none font-bold" value={globalDiscount.value} onChange={e => setGlobalDiscount({ ...globalDiscount, value: e.target.value })} placeholder="0" />
+                </div>
+            </div>
+
+            {/* Input Pajak */}
+            <div className="flex justify-between items-start text-xs">
+                <div>
+                    <span className="font-bold text-slate-500 block mb-1">Pajak (%)</span>
+                    {/* Toggle Button */}
+                    <div className="flex bg-slate-100 p-0.5 rounded-lg gap-0.5">
+                        <button onClick={()=>setGlobalTaxType('exclude')} className={`px-2 py-1 rounded text-[9px] font-bold transition ${globalTaxType==='exclude'?'bg-white shadow text-indigo-600':'text-slate-400'}`}>+Exc</button>
+                        <button onClick={()=>setGlobalTaxType('include')} className={`px-2 py-1 rounded text-[9px] font-bold transition ${globalTaxType==='include'?'bg-white shadow text-indigo-600':'text-slate-400'}`}>Inc</button>
+                    </div>
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                    <input type="number" className="w-12 text-right bg-slate-50 border border-slate-200 rounded px-2 py-1 outline-none font-bold" value={globalTaxPct} onChange={e => setGlobalTaxPct(e.target.value)} placeholder="0" />
+                    <span className="text-slate-400 font-medium w-20 text-right">{formatIDR(calc.taxAmount)}</span>
+                </div>
+            </div>
+
+            <div className="border-t border-dashed border-slate-200 my-2"></div>
+
+            {/* Total */}
+            <div className="flex justify-between items-end mb-2">
+                <div className="flex flex-col">
+                    <span className="text-slate-500 text-xs font-bold uppercase">Total Akhir</span>
+                    {globalTaxType === 'include' && calc.taxAmount > 0 && <span className="text-[9px] text-slate-400">(Termasuk PPN)</span>}
+                </div>
+                <span className="text-2xl font-extrabold text-slate-900">{formatIDR(calc.grandTotal)}</span>
+            </div>
+
+            <button onClick={onCheckout} disabled={cart.length === 0 || processing} className="w-full py-3.5 bg-slate-900 text-white rounded-xl font-bold shadow-lg hover:bg-slate-800 disabled:opacity-50 active:scale-95 transition flex justify-center items-center gap-2">
+                {processing ? <Loader2 className="animate-spin" size={20}/> : "Proses Pembayaran"}
+            </button>
         </div>
     </div>
 );

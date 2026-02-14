@@ -10,7 +10,8 @@ import {
   Briefcase, Sparkles, ChevronRight, ChevronLeft, Crown, RefreshCcw,
   BookOpenCheck, ClipboardList, LayoutGrid, 
   Package, Receipt, Calculator, Users, ScrollText, HandCoins, 
-  PiggyBank, Target, Landmark, Calendar, TrendingUp, CheckCircle2, Rocket, Lightbulb, Wallet
+  PiggyBank, Target, Landmark, Calendar, TrendingUp, CheckCircle2, Rocket, Lightbulb, Wallet,
+  Archive, ShoppingBag, FileText
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -453,7 +454,7 @@ export default function Dashboard() {
                <div className="grid grid-cols-4 gap-3">
                    <MenuCard icon={BookOpenCheck} label="Jurnal" onClick={() => navigate('/journal-process')} colorClass="bg-indigo-50 text-indigo-600"/>
                    <MenuCard icon={ClipboardList} label="Laporan" onClick={() => navigate('/reports-menu')} colorClass="bg-rose-50 text-rose-600"/>
-                   <MenuCard icon={Package} label="Stok" onClick={() => navigate('/stock')} colorClass="bg-orange-50 text-orange-600"/>
+                   <MenuCard icon={Users} label="Karyawan" onClick={() => navigate('/employees')} colorClass="bg-emerald-50 text-emerald-600"/>
                    <MenuCard icon={LayoutGrid} label="Lainnya" onClick={() => setShowMoreMenu(true)} colorClass="bg-slate-50 text-slate-600"/>
                </div>
             </motion.div>
@@ -600,7 +601,7 @@ export default function Dashboard() {
         )}
       </AnimatePresence>
 
-      {/* MODAL UPSELL (SAMA) */}
+      {/* MODAL UPSELL */}
       <AnimatePresence>
         {showUpsell && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm" onClick={() => setShowUpsell(false)}>
@@ -690,12 +691,15 @@ export default function Dashboard() {
                                 navigate('/pos-mode');
                             }} 
                         />
-                        <MenuCard icon={Receipt} label="Invoice" onClick={() => navigate('/invoice')} colorClass="bg-red-50 text-red-600"/>
-                        <MenuCard icon={Calculator} label="Hutang" onClick={() => navigate('/debt')} colorClass="bg-cyan-50 text-cyan-600"/>
                         <MenuCard icon={Users} label="Karyawan" onClick={() => navigate('/employees')} colorClass="bg-emerald-50 text-emerald-600"/>
-                        <MenuCard icon={Landmark} label="Pajak" onClick={() => navigate('/tax')} colorClass="bg-violet-50 text-violet-600"/>
+                        <MenuCard icon={FileText} label="Master Akun" onClick={() => navigate('/coa')} colorClass="bg-indigo-50 text-indigo-600"/>
                         <MenuCard icon={Package} label="Gudang" onClick={() => navigate('/warehouse')} colorClass="bg-amber-50 text-amber-600"/>
+                        <MenuCard icon={Archive} label="Bahan" onClick={() => navigate('/inventory')} colorClass="bg-teal-50 text-teal-600"/>
+                        <MenuCard icon={ShoppingBag} label="Produk" onClick={() => navigate('/products')} colorClass="bg-orange-50 text-orange-600"/>
                         <MenuCard icon={Target} label="Target" onClick={() => navigate('/targets')} colorClass="bg-lime-50 text-lime-600"/>
+                        <MenuCard icon={Receipt} label="Invoice" onClick={() => navigate('/invoice')} colorClass="bg-red-50 text-red-600"/>
+                        <MenuCard icon={Calculator} label="Hutang" onClick={() => navigate('/debts')} colorClass="bg-cyan-50 text-cyan-600"/>
+                        <MenuCard icon={Landmark} label="Pajak" onClick={() => navigate('/tax')} colorClass="bg-violet-50 text-violet-600"/>
 
                         {/* PEMISAH MENU PRIBADI */}
                         <div className="col-span-3 mt-6 mb-2 flex items-center gap-3">
@@ -722,9 +726,11 @@ export default function Dashboard() {
                   {activeMode === 'ORGANIZATION' && (
                       <>
                         <MenuCard icon={HandCoins} label="Iuran" onClick={() => navigate('/dues')} colorClass="bg-pink-50 text-pink-600"/>
+                        <MenuCard icon={Users} label="Anggota" onClick={() => navigate('/members')} colorClass="bg-cyan-50 text-cyan-600"/>
                         <MenuCard icon={ScrollText} label="Proposal" onClick={() => navigate('/proposals')} colorClass="bg-yellow-50 text-yellow-600"/>
-                        <MenuCard icon={Target} label="Program" onClick={() => navigate('/programs')} colorClass="bg-lime-50 text-lime-600"/>
                         <MenuCard icon={Package} label="Aset" onClick={() => navigate('/inventory')} colorClass="bg-orange-50 text-orange-600"/>
+                        <MenuCard icon={BookOpenCheck} label="Jurnal" onClick={() => navigate('/journal-process')} colorClass="bg-indigo-50 text-indigo-600"/>
+                        <MenuCard icon={ClipboardList} label="Laporan" onClick={() => navigate('/reports-menu')} colorClass="bg-rose-50 text-rose-600"/>
 
                         <div className="col-span-3 mt-6 mb-2 flex items-center gap-3">
                              <div className="h-px bg-slate-200 flex-1"></div>
@@ -791,12 +797,15 @@ export default function Dashboard() {
                                             navigate('/pos-mode');
                                         }} 
                                     />
-                                    <MenuCard icon={Receipt} label="Invoice" onClick={() => navigate('/invoice')} colorClass="bg-red-50 text-red-600"/>
-                                    <MenuCard icon={Calculator} label="Hutang" onClick={() => navigate('/debt')} colorClass="bg-cyan-50 text-cyan-600"/>
                                     <MenuCard icon={Users} label="Karyawan" onClick={() => navigate('/employees')} colorClass="bg-emerald-50 text-emerald-600"/>
-                                    <MenuCard icon={Landmark} label="Pajak" onClick={() => navigate('/tax')} colorClass="bg-violet-50 text-violet-600"/>
+                                    <MenuCard icon={FileText} label="Master Akun" onClick={() => navigate('/coa')} colorClass="bg-indigo-50 text-indigo-600"/>
                                     <MenuCard icon={Package} label="Gudang" onClick={() => navigate('/warehouse')} colorClass="bg-amber-50 text-amber-600"/>
+                                    <MenuCard icon={Archive} label="Bahan" onClick={() => navigate('/inventory')} colorClass="bg-teal-50 text-teal-600"/>
+                                    <MenuCard icon={ShoppingBag} label="Produk" onClick={() => navigate('/products')} colorClass="bg-orange-50 text-orange-600"/>
                                     <MenuCard icon={Target} label="Target" onClick={() => navigate('/targets')} colorClass="bg-lime-50 text-lime-600"/>
+                                    <MenuCard icon={Receipt} label="Invoice" onClick={() => navigate('/invoice')} colorClass="bg-red-50 text-red-600"/>
+                                    <MenuCard icon={Calculator} label="Hutang" onClick={() => navigate('/debts')} colorClass="bg-cyan-50 text-cyan-600"/>
+                                    <MenuCard icon={Landmark} label="Pajak" onClick={() => navigate('/tax')} colorClass="bg-violet-50 text-violet-600"/>
                                   </>
                               ) : (
                                   <>
@@ -816,11 +825,16 @@ export default function Dashboard() {
                                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fitur Bisnis (Pro)</p>
                                   <div className="h-px bg-slate-200 flex-1"></div>
                               </div>
-                              <MenuCard icon={Package} label="Stok" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
-                              <MenuCard icon={Receipt} label="Invoice" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
-                              <MenuCard icon={BookOpenCheck} label="Jurnal" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
-                              <MenuCard icon={ClipboardList} label="Laporan" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
-                              <MenuCard icon={Users} label="Karyawan" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                            <MenuCard icon={Users} label="Karyawan" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                            <MenuCard icon={FileText} label="Master Akun" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                            <MenuCard icon={ScanLine} label="Kasir" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                            <MenuCard icon={Package} label="Gudang" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                            <MenuCard icon={Archive} label="Bahan" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                            <MenuCard icon={ShoppingBag} label="Produk" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                            <MenuCard icon={Target} label="Target" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                            <MenuCard icon={Receipt} label="Invoice" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                            <MenuCard icon={Calculator} label="Hutang" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
+                            <MenuCard icon={Landmark} label="Pajak" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
 
                               <div className="col-span-3 mt-6 mb-2 flex items-center gap-3">
                                   <div className="h-px bg-slate-200 flex-1"></div>
