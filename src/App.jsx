@@ -46,6 +46,7 @@ import DebtPage from './pages/business/DebtPage';
 import InvoicePage from './pages/business/InvoicePage';
 import CoaPage from './pages/business/CoaPage';
 import JournalPage from './pages/business/JournalPage';
+import BusinessAnalytics from './components/BusinessAnalytics';
 
 // --- CONFIG EMAIL ADMIN ---
 const ADMIN_EMAIL = 'kustianaziz6@gmail.com'; 
@@ -132,6 +133,7 @@ function App() {
             <Route path="/debts" element={<DebtPage />} />
             <Route path="/invoice" element={<InvoicePage />} />
             <Route path="/coa" element={<CoaPage />} />
+            <Route path="/business-analytics" element={<PrivateRoute><BusinessAnalytics /></PrivateRoute>  }/>
             <Route path="/wallets" element={<PrivateRoute><WalletPage /></PrivateRoute>} />
             
             {/* PUBLIC */}

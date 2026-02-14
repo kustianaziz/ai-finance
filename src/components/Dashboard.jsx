@@ -452,9 +452,9 @@ export default function Dashboard() {
                    <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-bold">Juragan</span>
                </div>
                <div className="grid grid-cols-4 gap-3">
+                   <MenuCard icon={BarChart3} label="Bisnis Cek" colorClass="bg-blue-50 text-blue-600"onClick={() => navigate('/business-analytics')}/>
                    <MenuCard icon={BookOpenCheck} label="Jurnal" onClick={() => navigate('/journal-process')} colorClass="bg-indigo-50 text-indigo-600"/>
                    <MenuCard icon={ClipboardList} label="Laporan" onClick={() => navigate('/reports-menu')} colorClass="bg-rose-50 text-rose-600"/>
-                   <MenuCard icon={Users} label="Karyawan" onClick={() => navigate('/employees')} colorClass="bg-emerald-50 text-emerald-600"/>
                    <MenuCard icon={LayoutGrid} label="Lainnya" onClick={() => setShowMoreMenu(true)} colorClass="bg-slate-50 text-slate-600"/>
                </div>
             </motion.div>
@@ -669,6 +669,7 @@ export default function Dashboard() {
                   {/* --- MODE BISNIS --- */}
                   {activeMode === 'BUSINESS' && (
                       <>
+                        <MenuCard icon={BarChart3} label="Bisnis Cek" colorClass="bg-blue-50 text-blue-600"onClick={() => navigate('/business-analytics')}/>
                         <MenuCard 
                             icon={ScanLine} 
                             label="Kasir" 
@@ -775,6 +776,7 @@ export default function Dashboard() {
                               </div>
                               {isBusinessUser ? (
                                   <>
+                                      <MenuCard icon={BarChart3} label="Bisnis Cek" colorClass="bg-blue-50 text-blue-600"onClick={() => navigate('/business-analytics')}/>
                                       <MenuCard 
                                         icon={ScanLine} 
                                         label="Kasir" 
@@ -825,6 +827,7 @@ export default function Dashboard() {
                                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fitur Bisnis (Pro)</p>
                                   <div className="h-px bg-slate-200 flex-1"></div>
                               </div>
+                            <MenuCard icon={BarChart3} label="Bisnis Cek" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
                             <MenuCard icon={Users} label="Karyawan" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
                             <MenuCard icon={FileText} label="Master Akun" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
                             <MenuCard icon={ScanLine} label="Kasir" isLocked={true} isPro={true} colorClass="bg-slate-50 text-slate-400"/>
