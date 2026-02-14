@@ -48,6 +48,10 @@ import CoaPage from './pages/business/CoaPage';
 import JournalPage from './pages/business/JournalPage';
 import BusinessAnalytics from './components/BusinessAnalytics';
 
+//-- Tour --//
+import DynamicTour from './components/DynamicTour';
+import TourManagePage from './pages/admin/TourManagePage';
+
 // --- CONFIG EMAIL ADMIN ---
 const ADMIN_EMAIL = 'kustianaziz6@gmail.com'; 
 
@@ -122,6 +126,7 @@ function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
+          <DynamicTour />
           <Routes>
             <Route path="/portal/:slug" element={<StorePortal />} />
             <Route path="/employee-dashboard" element={<EmployeeDashboard />} />
@@ -191,6 +196,7 @@ function App() {
                 <Route element={<AppLayout />}>
                     {/* Daftar Halaman Admin di sini */}
                     <Route path="/admin" element={<AdminUsersPage />} />
+                    <Route path="/admin/tour" element={<TourManagePage />} />
                 </Route>
             </Route>
 
