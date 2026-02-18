@@ -9,7 +9,7 @@ export default function TourManagePage() {
   const [loading, setLoading] = useState(true);
   const [formData, setFormData] = useState({ 
     step_order: 1, target_id: '', route_path: '', title: '', content: '', video_url: '', 
-    target_audience: 'ALL'
+    selected_audiences: ['ALL']
 });
 
   useEffect(() => { fetchSteps(); }, []);
@@ -23,16 +23,58 @@ export default function TourManagePage() {
 
   const handleSave = async () => {
       if(!formData.target_id || !formData.title) return alert("Target ID dan Judul wajib diisi!");
-      
-      const payload = { ...formData };
-      if(!payload.step_order) payload.step_order = steps.length + 1;
+      if(formData.selected_audiences.length === 0) return alert("Pilih minimal satu target audience!");
+
+      const payload = {
+          step_order: formData.step_order || (steps.length + 1),
+          target_id: formData.target_id,
+          route_path: formData.route_path,
+          title: formData.title,
+          content: formData.content,
+          video_url: formData.video_url,
+          // GABUNGKAN ARRAY JADI STRING: ['PERSONAL', 'PRO'] -> 'PERSONAL,PRO'
+          target_audience: formData.selected_audiences.join(',') 
+      };
 
       const { error } = await supabase.from('tour_steps').insert(payload);
+      
       if(error) alert(error.message);
       else {
-          setFormData({ step_order: steps.length + 2, target_id: '', route_path: '', title: '', content: '', video_url: '' });
+          // Reset Form
+          setFormData({ 
+              step_order: steps.length + 2, 
+              target_id: '', route_path: '', title: '', content: '', video_url: '', 
+              selected_audiences: ['ALL'] 
+          });
           fetchSteps();
       }
+  };
+
+  const handleAudienceChange = (value) => {
+      setFormData(prev => {
+          let newSelection = [...prev.selected_audiences];
+          
+          if (value === 'ALL') {
+              // Jika pilih ALL, reset yang lain
+              return { ...prev, selected_audiences: ['ALL'] };
+          } else {
+              // Jika pilih selain ALL, hapus 'ALL' dulu
+              newSelection = newSelection.filter(item => item !== 'ALL');
+              
+              if (newSelection.includes(value)) {
+                  // Uncheck (Hapus)
+                  newSelection = newSelection.filter(item => item !== value);
+              } else {
+                  // Check (Tambah)
+                  newSelection.push(value);
+              }
+              
+              // Jika kosong, balik ke ALL (opsional, biar ga null)
+              if (newSelection.length === 0) newSelection = ['ALL'];
+              
+              return { ...prev, selected_audiences: newSelection };
+          }
+      });
   };
 
   const handleDelete = async (id) => {
@@ -85,18 +127,27 @@ export default function TourManagePage() {
                         <label className="text-xs font-bold text-slate-500">Video URL (Opsional)</label>
                         <input type="text" placeholder="https://..." value={formData.video_url} onChange={e=>setFormData({...formData, video_url: e.target.value})} className="w-full p-2 border rounded-lg text-sm"/>
                     </div>
+                    {/* GANTI SELECT DENGAN CHECKBOX GROUP INI */}
                     <div>
-                        <label className="text-xs font-bold text-slate-500">Target Audience</label>
-                        <select 
-                            value={formData.target_audience} 
-                            onChange={e=>setFormData({...formData, target_audience: e.target.value})} 
-                            className="w-full p-2 border rounded-lg text-sm bg-white"
-                        >
-                            <option value="ALL">Semua User (ALL)</option>
-                            <option value="PERSONAL">Hanya Personal Gratis</option>
-                            <option value="PRO">Hanya Personal Pro</option>
-                            <option value="BUSINESS">Hanya Akun Bisnis/Karyawan</option>
-                        </select>
+                        <label className="text-xs font-bold text-slate-500 mb-2 block">Target Audience</label>
+                        <div className="flex flex-wrap gap-2">
+                            {['ALL', 'PERSONAL', 'PRO', 'BUSINESS'].map((type) => (
+                                <button
+                                    key={type}
+                                    onClick={() => handleAudienceChange(type)}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition ${
+                                        formData.selected_audiences.includes(type)
+                                            ? 'bg-blue-600 text-white border-blue-600'
+                                            : 'bg-white text-slate-500 border-slate-200 hover:border-blue-300'
+                                    }`}
+                                >
+                                    {type === 'ALL' ? 'Semua User' : type}
+                                </button>
+                            ))}
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-1">
+                            Terpilih: {formData.selected_audiences.join(', ')}
+                        </p>
                     </div>
                     <button onClick={handleSave} className="w-full py-2.5 bg-blue-600 text-white rounded-xl font-bold shadow-lg shadow-blue-200 hover:bg-blue-700 transition flex justify-center items-center gap-2">
                         <Save size={18}/> Simpan Step

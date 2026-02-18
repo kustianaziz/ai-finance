@@ -26,34 +26,52 @@ export default function DynamicTour() {
 
   // 1. FETCH STEPS
   useEffect(() => {
+    // 🛑 GUARD: JANGAN JALAN KALAU BELUM LOGIN
+    if (!user && !activeEmployee) return; 
+
     fetchSteps();
   }, [user, activeEmployee]);
 
   const fetchSteps = async () => {
+    // Cek apakah user sudah pernah melihat tour
     const hasSeenTour = localStorage.getItem('has_seen_tour_v1');
     if (hasSeenTour) return;
 
-    let currentUserType = 'PERSONAL'; 
-    if (activeEmployee) currentUserType = 'BUSINESS';
-    else {
-        const cached = localStorage.getItem('user_profile_cache');
-        if (cached) {
-            const p = JSON.parse(cached);
+    // 1. Tentukan Tipe User Saat Ini
+    let currentUserType = 'PERSONAL'; // Default (Gratis)
+    
+    if (activeEmployee) {
+        currentUserType = 'BUSINESS';
+    } else {
+        // Cek profile cache atau ambil dari user object jika ada metadata
+        // (Asumsi Abang menyimpan profile di localStorage saat login)
+        const cachedProfile = localStorage.getItem('user_profile_cache');
+        if (cachedProfile) {
+            const p = JSON.parse(cachedProfile);
             if (['business', 'organization'].includes(p.account_type)) currentUserType = 'BUSINESS';
             else if (p.account_type === 'personal_pro') currentUserType = 'PRO';
         }
     }
 
+    // 2. Fetch Data Tour
     const { data } = await supabase
       .from('tour_steps')
       .select('*')
       .eq('is_active', true)
-      .in('target_audience', ['ALL', currentUserType])
       .order('step_order', { ascending: true });
 
     if (data && data.length > 0) {
-      setSteps(data);
-      setIsVisible(true);
+      // 3. FILTER MANUAL DI CLIENT (Karena logika 'IN' database terbatas untuk multi-value string)
+      // Kita cari step yang target_audience-nya MENGANDUNG tipe user saat ini ATAU 'ALL'
+      const filteredSteps = data.filter(step => {
+          const targets = (step.target_audience || 'ALL').split(','); // Pisahkan string 'PERSONAL,PRO'
+          return targets.includes('ALL') || targets.includes(currentUserType);
+      });
+
+      if (filteredSteps.length > 0) {
+          setSteps(filteredSteps);
+          setIsVisible(true);
+      }
     }
   };
 
@@ -161,16 +179,46 @@ export default function DynamicTour() {
       if (!runOnce) searchInterval.current = setInterval(scan, 100);
   };
 
+  // --- FUNGSI PENCARI ELEMEN (SUPER SMART - FIXED) ---
   const findElementByTextOrId = (identifier) => {
+      // 1. Cek apakah inputan adalah CSS Selector (Class/Complex Selector)
+      // Ciri-cirinya: diawali titik (.) untuk class, atau mengandung tanda kurung []
+      if (identifier.startsWith('.') || identifier.includes('[') || identifier.includes('>')) {
+          try {
+              // Cari SEMUA elemen yang cocok
+              const elements = document.querySelectorAll(identifier);
+              // Cari yang paling VISIBLE (bukan hidden, punya dimensi)
+              for (let el of elements) {
+                  const rect = el.getBoundingClientRect();
+                  if (rect.width > 0 && rect.height > 0) {
+                      // KETEMU! Jika ini icon di dalam button, ambil buttonnya
+                      return el.closest('button') || el.closest('a') || el.closest('[onClick]') || el;
+                  }
+              }
+          } catch (e) {
+              // Kalau syntax error, abaikan dan lanjut ke bawah
+          }
+      }
+
+      // 2. Cek ID Polos (Cara Lama: 'btn-menu')
       let el = document.getElementById(identifier);
+      
+      // 3. Kalau ID gak ada, Cari Berdasarkan Teks (Cara Text)
       if (!el) {
-          const candidates = Array.from(document.querySelectorAll('button, a, h1, h2, h3, h4, span, p, div[role="button"]'));
+          // Cari elemen yang mungkin berisi teks
+          const candidates = Array.from(document.querySelectorAll('button, a, h1, h2, h3, h4, span, p, div[role="button"], div[className*="button"]'));
+          
           const found = candidates.find(candidate => {
               const text = candidate.innerText?.trim().toLowerCase();
               return text === identifier.toLowerCase();
           });
+
           if (found) {
-              el = found.closest('button') || found.closest('a') || found.closest('.menu-card') || found.closest('[onClick]') || found; 
+              // Ambil parent yang bisa diklik
+              el = found.closest('button') || 
+                   found.closest('a') || 
+                   found.closest('[onClick]') || 
+                   found; 
           }
       }
       return el;
