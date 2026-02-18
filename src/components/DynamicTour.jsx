@@ -62,73 +62,67 @@ export default function DynamicTour() {
     }
   };
 
-  // 2. LISTENER RESIZE
-  useEffect(() => {
-    const handleResize = () => {
-        setWindowSize({ w: window.innerWidth, h: window.innerHeight });
-        if(steps[currentStepIndex] && targetRect) {
-             startRadar(steps[currentStepIndex].target_id, true);
-        }
-    };
-    window.addEventListener('resize', handleResize);
-    window.addEventListener('scroll', handleResize, true);
-    return () => {
-        window.removeEventListener('resize', handleResize);
-        window.removeEventListener('scroll', handleResize, true);
-    };
-  }, [currentStepIndex, steps, targetRect]);
-
-  // 3. LOGIC NAVIGASI UTAMA
-  // 3. LOGIC NAVIGASI UTAMA
+  // 3. LOGIC NAVIGASI UTAMA (ANTI LOMPAT & AUTO CLICK)
   useEffect(() => {
     if (!isVisible || steps.length === 0) return;
 
     const currentStep = steps[currentStepIndex];
     const nextStep = steps[currentStepIndex + 1];
-    
-    // Deteksi Mundur
+    const prevStep = steps[currentStepIndex - 1]; // Ambil langkah sebelumnya
+
+    // Deteksi Arah Mundur
     const isMovingBack = currentStepIndex < lastStepIndex.current;
     lastStepIndex.current = currentStepIndex;
 
-    // Reset Visual
+    // Reset Target
     setTargetRect(null); 
     if (searchInterval.current) clearInterval(searchInterval.current);
 
-    // --- PERBAIKAN AUTO ADVANCE ---
-    // Cek apakah kita sudah di halaman yang SALAH untuk step saat ini?
-    const isOnWrongPageForCurrentStep = location.pathname !== currentStep.route_path;
-    
-    // Cek apakah kita SECARA KEBETULAN sudah ada di halaman step berikutnya?
-    const isOnNextPage = nextStep && location.pathname === nextStep.route_path;
+    // --- LOGIC ANTI-LOMPAT ---
+    // Cek apakah browser "masih nyangkut" di halaman step sebelumnya?
+    // Jika YA, berarti kita sedang proses loading pindah halaman. JANGAN Auto-Advance.
+    const isLaggingBehind = prevStep && 
+                            location.pathname === prevStep.route_path && 
+                            location.pathname !== currentStep.route_path;
 
-    // JANGAN auto-advance kalau kita baru saja mau pindah ke halaman step ini.
-    // Auto-advance cuma boleh jalan kalau kita MEMANG SUDAH di halaman next step dan BUKAN di halaman current step.
-    if (!isMovingBack && nextStep && isOnNextPage && isOnWrongPageForCurrentStep) {
-        // Double check: Jangan lompat kalau route step sekarang dan step depan itu SAMA (beda target di 1 halaman)
-        if (currentStep.route_path !== nextStep.route_path) {
-             setCurrentStepIndex(prev => prev + 1);
-             setIsVideoPlaying(false);
-             return; 
-        }
+    // --- AUTO ADVANCE (DIPERKETAT) ---
+    // Hanya boleh maju otomatis jika:
+    // 1. Tidak sedang mundur.
+    // 2. Tidak sedang "nyangkut" di halaman lama (!isLaggingBehind).
+    // 3. Posisi sekarang BENAR-BENAR ada di halaman Step Berikutnya.
+    // 4. Halaman Step Berikutnya ITU BEDA dengan halaman Step Saat Ini (biar gak loop).
+    if (
+        !isMovingBack && 
+        !isLaggingBehind && 
+        nextStep && 
+        location.pathname === nextStep.route_path && 
+        location.pathname !== currentStep.route_path
+    ) {
+        setCurrentStepIndex(prev => prev + 1);
+        setIsVideoPlaying(false);
+        return; 
     }
 
     // --- EKSEKUSI STEP ---
     const executeStep = () => {
+        // Mode Auto Clicker (Buka Modal)
         if (currentStep.pre_click_target && !isMovingBack) {
             runAutoClicker(currentStep.pre_click_target, () => {
                 startRadar(currentStep.target_id);
             });
         } else {
+            // Mode Normal
             startRadar(currentStep.target_id);
         }
     };
 
-    // Navigasi jika salah halaman (Redirect Paksa)
+    // Navigasi Halaman (Jika Salah Tempat)
     if (location.pathname !== currentStep.route_path) {
       navigate(currentStep.route_path);
-      // Tunggu navigasi selesai agak lamaan dikit biar gak balapan sama Auto Advance
-      setTimeout(executeStep, 1000); 
+      // Tunggu agak lama (800ms) biar halaman kelar render sebelum cari target
+      setTimeout(executeStep, 800);
     } else {
+      // Sudah di tempat yang benar, langsung eksekusi
       executeStep();
     }
 
