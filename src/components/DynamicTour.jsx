@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, ChevronRight, ChevronLeft, PlayCircle } from 'lucide-react';
+import { X, ChevronRight, ChevronLeft, PlayCircle, MousePointerClick } from 'lucide-react';
 import { useAuth } from '../context/AuthProvider';
 
 export default function DynamicTour() {
@@ -13,38 +13,28 @@ export default function DynamicTour() {
   const [steps, setSteps] = useState([]);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [isVisible, setIsVisible] = useState(false);
-  const [targetRect, setTargetRect] = useState(null);
+  const [targetRect, setTargetRect] = useState(null); 
   const [popoverStyle, setPopoverStyle] = useState({});
   const [arrowStyle, setArrowStyle] = useState({});
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   
-  // REF BARU: Untuk melacak apakah kita sedang mundur atau maju
   const lastStepIndex = useRef(0);
   const searchInterval = useRef(null);
-
   const [windowSize, setWindowSize] = useState({ w: window.innerWidth, h: window.innerHeight });
 
   // 1. FETCH STEPS
   useEffect(() => {
-    // 🛑 GUARD: JANGAN JALAN KALAU BELUM LOGIN
     if (!user && !activeEmployee) return; 
-
     fetchSteps();
   }, [user, activeEmployee]);
 
   const fetchSteps = async () => {
-    // Cek apakah user sudah pernah melihat tour
     const hasSeenTour = localStorage.getItem('has_seen_tour_v1');
     if (hasSeenTour) return;
 
-    // 1. Tentukan Tipe User Saat Ini
-    let currentUserType = 'PERSONAL'; // Default (Gratis)
-    
-    if (activeEmployee) {
-        currentUserType = 'BUSINESS';
-    } else {
-        // Cek profile cache atau ambil dari user object jika ada metadata
-        // (Asumsi Abang menyimpan profile di localStorage saat login)
+    let currentUserType = 'PERSONAL'; 
+    if (activeEmployee) currentUserType = 'BUSINESS';
+    else {
         const cachedProfile = localStorage.getItem('user_profile_cache');
         if (cachedProfile) {
             const p = JSON.parse(cachedProfile);
@@ -53,7 +43,6 @@ export default function DynamicTour() {
         }
     }
 
-    // 2. Fetch Data Tour
     const { data } = await supabase
       .from('tour_steps')
       .select('*')
@@ -61,10 +50,8 @@ export default function DynamicTour() {
       .order('step_order', { ascending: true });
 
     if (data && data.length > 0) {
-      // 3. FILTER MANUAL DI CLIENT (Karena logika 'IN' database terbatas untuk multi-value string)
-      // Kita cari step yang target_audience-nya MENGANDUNG tipe user saat ini ATAU 'ALL'
       const filteredSteps = data.filter(step => {
-          const targets = (step.target_audience || 'ALL').split(','); // Pisahkan string 'PERSONAL,PRO'
+          const targets = (step.target_audience || 'ALL').split(',');
           return targets.includes('ALL') || targets.includes(currentUserType);
       });
 
@@ -75,7 +62,7 @@ export default function DynamicTour() {
     }
   };
 
-  // 2. LISTENER RESIZE & SCROLL
+  // 2. LISTENER RESIZE
   useEffect(() => {
     const handleResize = () => {
         setWindowSize({ w: window.innerWidth, h: window.innerHeight });
@@ -91,48 +78,40 @@ export default function DynamicTour() {
     };
   }, [currentStepIndex, steps, targetRect]);
 
-  // 3. LOGIC NAVIGASI UTAMA (FIXED BACK BUTTON)
+  // 3. LOGIC NAVIGASI UTAMA
   useEffect(() => {
     if (!isVisible || steps.length === 0) return;
 
     const currentStep = steps[currentStepIndex];
     const nextStep = steps[currentStepIndex + 1];
-
-    // Deteksi Arah: Apakah kita mundur?
-    // Jika index sekarang < index sebelumnya, berarti mundur.
     const isMovingBack = currentStepIndex < lastStepIndex.current;
-    
-    // Update ref untuk render berikutnya
     lastStepIndex.current = currentStepIndex;
 
-    // Bersihkan radar sebelumnya
-    if (searchInterval.current) clearInterval(searchInterval.current);
     setTargetRect(null); 
+    if (searchInterval.current) clearInterval(searchInterval.current);
 
-    // --- LOGIC AUTO ADVANCE (DIPERBAIKI) ---
-    // Hanya majukan otomatis jika:
-    // 1. Kita TIDAK sedang mundur (!isMovingBack)
-    // 2. Kita berada di halaman langkah BERIKUTNYA
-    // 3. Halaman langkah berikutnya ITU BEDA dengan halaman sekarang (mencegah skip langkah di halaman yg sama)
-    if (
-        !isMovingBack &&
-        nextStep && 
-        location.pathname === nextStep.route_path &&
-        location.pathname !== currentStep.route_path
-    ) {
+    // Auto Advance Navigasi
+    if (!isMovingBack && nextStep && location.pathname === nextStep.route_path && location.pathname !== currentStep.route_path) {
         setCurrentStepIndex(prev => prev + 1);
         setIsVideoPlaying(false);
         return; 
     }
 
-    // --- LOGIC NAVIGASI HALAMAN ---
+    const executeStep = () => {
+        if (currentStep.pre_click_target && !isMovingBack) {
+            runAutoClicker(currentStep.pre_click_target, () => {
+                startRadar(currentStep.target_id);
+            });
+        } else {
+            startRadar(currentStep.target_id);
+        }
+    };
+
     if (location.pathname !== currentStep.route_path) {
       navigate(currentStep.route_path);
-      // Delay radar sedikit saat pindah halaman
-      setTimeout(() => startRadar(currentStep.target_id), 800);
+      setTimeout(executeStep, 800);
     } else {
-      // Langsung radar jika halaman sudah benar
-      startRadar(currentStep.target_id);
+      executeStep();
     }
 
     return () => {
@@ -141,7 +120,41 @@ export default function DynamicTour() {
   }, [currentStepIndex, isVisible, steps, location.pathname]);
 
 
-  // 4. RADAR PENCARI ELEMEN
+  // --- 4. LOGIC WAIT FOR USER CLICK (INTERACTION TRIGGER) ---
+  useEffect(() => {
+      if (!isVisible || !steps[currentStepIndex]) return;
+      
+      const step = steps[currentStepIndex];
+      
+      // Jika step ini mengharuskan user klik sesuatu
+      if (step.next_trigger_target) {
+          let triggerEl = null;
+
+          const handleUserInteraction = (e) => {
+              // Lanjut ke step berikutnya
+              setTimeout(() => {
+                 handleNext();
+              }, 500); 
+          };
+
+          const findTriggerInterval = setInterval(() => {
+              triggerEl = findElementByTextOrId(step.next_trigger_target);
+              if (triggerEl) {
+                  clearInterval(findTriggerInterval);
+                  // Pasang listener sekali jalan
+                  triggerEl.addEventListener('click', handleUserInteraction, { once: true }); 
+              }
+          }, 500);
+
+          return () => {
+              clearInterval(findTriggerInterval);
+              if (triggerEl) triggerEl.removeEventListener('click', handleUserInteraction);
+          };
+      }
+  }, [currentStepIndex, isVisible, steps]);
+
+
+  // 5. HELPER FUNCTIONS
   const startRadar = (identifier, runOnce = false) => {
       let attempts = 0;
       const maxAttempts = runOnce ? 1 : 50; 
@@ -158,96 +171,61 @@ export default function DynamicTour() {
               
               setTimeout(() => {
                   const rect = foundElement.getBoundingClientRect();
+                  if (rect.width === 0 || rect.height === 0) return; 
                   const step = steps[currentStepIndex];
                   calculateLayout(rect, step.position || 'bottom');
-                  
-                  setTargetRect({
-                      top: rect.top, left: rect.left, width: rect.width, height: rect.height,
-                      right: rect.right, bottom: rect.bottom
-                  });
-              }, 300);
+                  setTargetRect({ top: rect.top, left: rect.left, width: rect.width, height: rect.height, right: rect.right, bottom: rect.bottom });
+              }, 200);
           } else {
-              if (attempts >= maxAttempts) {
-                  clearInterval(searchInterval.current);
-                  setTargetRect(null);
-                  setPopoverStyle({ top: '50%', left: '50%', transform: 'translate(-50%, -50%)', position: 'fixed' });
-                  setArrowStyle({ display: 'none' });
-              }
+              if (attempts >= maxAttempts) clearInterval(searchInterval.current);
           }
       };
       scan();
       if (!runOnce) searchInterval.current = setInterval(scan, 100);
   };
 
-  // --- FUNGSI PENCARI ELEMEN (SUPER SMART - FIXED) ---
+  const runAutoClicker = (triggerId, onSuccess) => {
+      let attempts = 0;
+      const clickInterval = setInterval(() => {
+          attempts++;
+          const triggerEl = findElementByTextOrId(triggerId);
+          if (triggerEl) {
+              clearInterval(clickInterval);
+              triggerEl.click(); 
+              setTimeout(onSuccess, 600); 
+          } 
+          if (attempts > 30) clearInterval(clickInterval);
+      }, 100);
+  };
+
   const findElementByTextOrId = (identifier) => {
-      // 1. Cek apakah inputan adalah CSS Selector (Class/Complex Selector)
-      // Ciri-cirinya: diawali titik (.) untuk class, atau mengandung tanda kurung []
-      if (identifier.startsWith('.') || identifier.includes('[') || identifier.includes('>')) {
+      let el = null;
+      if (identifier.startsWith('.') || identifier.includes('[') || identifier.startsWith('#')) {
           try {
-              // Cari SEMUA elemen yang cocok
-              const elements = document.querySelectorAll(identifier);
-              // Cari yang paling VISIBLE (bukan hidden, punya dimensi)
-              for (let el of elements) {
-                  const rect = el.getBoundingClientRect();
-                  if (rect.width > 0 && rect.height > 0) {
-                      // KETEMU! Jika ini icon di dalam button, ambil buttonnya
-                      return el.closest('button') || el.closest('a') || el.closest('[onClick]') || el;
-                  }
-              }
-          } catch (e) {
-              // Kalau syntax error, abaikan dan lanjut ke bawah
-          }
+              const rawEl = document.querySelector(identifier);
+              if (rawEl) el = rawEl.closest('button') || rawEl.closest('.menu-card') || rawEl.closest('[onClick]') || rawEl;
+          } catch (e) {}
       }
-
-      // 2. Cek ID Polos (Cara Lama: 'btn-menu')
-      let el = document.getElementById(identifier);
-      
-      // 3. Kalau ID gak ada, Cari Berdasarkan Teks (Cara Text)
+      if (!el) el = document.getElementById(identifier);
       if (!el) {
-          // Cari elemen yang mungkin berisi teks
-          const candidates = Array.from(document.querySelectorAll('button, a, h1, h2, h3, h4, span, p, div[role="button"], div[className*="button"]'));
-          
-          const found = candidates.find(candidate => {
-              const text = candidate.innerText?.trim().toLowerCase();
-              return text === identifier.toLowerCase();
-          });
-
-          if (found) {
-              // Ambil parent yang bisa diklik
-              el = found.closest('button') || 
-                   found.closest('a') || 
-                   found.closest('[onClick]') || 
-                   found; 
-          }
+          const candidates = Array.from(document.querySelectorAll('button, a, h1, h2, h3, h4, span, p, div[role="button"]'));
+          const found = candidates.find(candidate => candidate.innerText?.trim().toLowerCase() === identifier.toLowerCase());
+          if (found) el = found.closest('button') || found.closest('a') || found.closest('[onClick]') || found; 
       }
       return el;
   };
 
   const calculateLayout = (rect, pos) => {
-      const GAP = 15; 
-      const CARD_W = 300; 
-
-      let top = 0, left = 0;
+      const GAP = 15; const CARD_W = 300; let top = 0, left = 0;
+      if (pos === 'top') { top = rect.top - GAP - 10; left = rect.left + (rect.width / 2) - (CARD_W / 2); } 
+      else if (pos === 'bottom') { top = rect.bottom + GAP; left = rect.left + (rect.width / 2) - (CARD_W / 2); } 
+      else if (pos === 'left') { top = rect.top + (rect.height/2) - 100; left = rect.left - CARD_W - GAP; } 
+      else if (pos === 'right') { top = rect.top + (rect.height/2) - 100; left = rect.right + GAP; }
       
-      if (pos === 'top') {
-          top = rect.top - GAP - 10; 
-          left = rect.left + (rect.width / 2) - (CARD_W / 2);
-      } else if (pos === 'bottom') {
-          top = rect.bottom + GAP;
-          left = rect.left + (rect.width / 2) - (CARD_W / 2);
-      } else if (pos === 'left') {
-          top = rect.top + (rect.height/2) - 100; 
-          left = rect.left - CARD_W - GAP;
-      } else if (pos === 'right') {
-          top = rect.top + (rect.height/2) - 100;
-          left = rect.right + GAP;
-      }
-
       if (left < 10) left = 10;
       if (left + CARD_W > window.innerWidth) left = window.innerWidth - CARD_W - 10;
+      if (top + 250 > window.innerHeight && pos === 'bottom') top = rect.top - GAP - 200; 
       if (top < 10) top = 10;
-      if (top + 200 > window.innerHeight) top = window.innerHeight - 250; 
 
       let arrowPos = {};
       if (pos === 'bottom') arrowPos = { top: -6, left: '50%', marginLeft: '-6px', transform: 'rotate(45deg)' };
@@ -269,10 +247,7 @@ export default function DynamicTour() {
   };
 
   const handlePrev = () => {
-    if (currentStepIndex > 0) {
-        setCurrentStepIndex(prev => prev - 1);
-        setIsVideoPlaying(false);
-    }
+    if (currentStepIndex > 0) { setCurrentStepIndex(prev => prev - 1); setIsVideoPlaying(false); }
   };
 
   const handleFinish = () => {
@@ -280,50 +255,38 @@ export default function DynamicTour() {
     localStorage.setItem('has_seen_tour_v1', 'true');
   };
 
-  if (!isVisible || steps.length === 0) return null;
-  const step = steps[currentStepIndex];
+  if (!isVisible || steps.length === 0 || !targetRect) return null; 
 
-  // SVG PATH GENERATOR
-  const svgPath = targetRect 
-    ? `M0,0 H${windowSize.w} V${windowSize.h} H0 Z M${targetRect.left},${targetRect.top} V${targetRect.bottom} H${targetRect.right} V${targetRect.top} Z`
-    : `M0,0 H${windowSize.w} V${windowSize.h} H0 Z`; 
+  const step = steps[currentStepIndex];
+  const svgPath = `M0,0 H${windowSize.w} V${windowSize.h} H0 Z M${targetRect.left},${targetRect.top} V${targetRect.bottom} H${targetRect.right} V${targetRect.top} Z`;
+
+  // --- LOGIC KLIK TEMBUS ---
+  // Jika sedang menunggu user klik (Trigger Mode), matikan pointer-events di overlay
+  // supaya user bisa klik tombol apapun di aplikasi (termasuk Simpan).
+  const overlayClass = step.next_trigger_target ? 'pointer-events-none' : 'pointer-events-auto';
 
   return (
     <AnimatePresence>
-      {isVisible && (
-        <div className="fixed inset-0 z-[99999] isolate font-sans">
+      {isVisible && targetRect && (
+        // 1. PEMBUNGKUS UTAMA: pointer-events-none (WAJIB) biar klik tembus ke layer bawah
+        <div className="fixed inset-0 z-[99999] isolate font-sans pointer-events-none">
           
-          <svg className="absolute inset-0 w-full h-full pointer-events-auto" style={{mixBlendMode: 'hard-light'}}>
+          {/* 2. OVERLAY HITAM: 
+                 - Mode Normal: pointer-events-auto (Blokir klik)
+                 - Mode Trigger: pointer-events-none (Bebaskan klik)
+          */}
+          <svg className={`absolute inset-0 w-full h-full ${overlayClass}`} style={{mixBlendMode: 'hard-light'}}>
              <path d={svgPath} fill="rgba(0, 0, 0, 0.7)" fillRule="evenodd" />
           </svg>
 
-          {targetRect && (
-             <motion.div 
-                initial={{ opacity: 0, scale: 1.1 }}
-                animate={{ opacity: 1, scale: 1 }}
-                layoutId="highlight-border"
-                className="absolute border-2 border-yellow-400 rounded-lg pointer-events-none shadow-[0_0_20px_rgba(250,204,21,0.8)]"
-                style={{
-                    top: targetRect.top - 4,
-                    left: targetRect.left - 4,
-                    width: targetRect.width + 8,
-                    height: targetRect.height + 8,
-                }}
-             >
-                <span className="absolute inline-flex h-full w-full rounded-lg bg-yellow-400 opacity-20 animate-ping"></span>
-             </motion.div>
-          )}
+          {/* 3. HIGHLIGHT BORDER */}
+          <motion.div initial={{ opacity: 0, scale: 1.1 }} animate={{ opacity: 1, scale: 1 }} layoutId="highlight-border" className="absolute border-2 border-yellow-400 rounded-lg shadow-[0_0_20px_rgba(250,204,21,0.8)]" style={{ top: targetRect.top - 4, left: targetRect.left - 4, width: targetRect.width + 8, height: targetRect.height + 8 }}>
+            <span className="absolute inline-flex h-full w-full rounded-lg bg-yellow-400 opacity-20 animate-ping"></span>
+          </motion.div>
 
-          <motion.div
-            initial={{ opacity: 0, y: 10, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            key={currentStepIndex}
-            className="bg-white w-[300px] rounded-xl shadow-2xl absolute flex flex-col overflow-hidden ring-1 ring-slate-900/5"
-            style={popoverStyle}
-          >
-            {targetRect && (
-                <div className="absolute w-3 h-3 bg-white border-l border-t border-slate-100 z-10 shadow-sm" style={arrowStyle} />
-            )}
+          {/* 4. CARD TOUR: Harus pointer-events-auto biar tombol di dalamnya bisa diklik */}
+          <motion.div drag dragMomentum={false} initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} key={currentStepIndex} className="bg-white w-[300px] rounded-xl shadow-2xl absolute flex flex-col overflow-hidden ring-1 ring-slate-900/5 pointer-events-auto" style={popoverStyle}>
+            <div className="absolute w-3 h-3 bg-white border-l border-t border-slate-100 z-10 shadow-sm" style={arrowStyle} />
 
             {step.video_url && (
                 <div className="w-full h-40 bg-slate-900 relative flex items-center justify-center shrink-0">
@@ -358,9 +321,16 @@ export default function DynamicTour() {
                         {currentStepIndex > 0 && (
                             <button onClick={handlePrev} className="p-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition"><ChevronLeft size={16}/></button>
                         )}
-                        <button onClick={handleNext} className="py-1.5 px-3 bg-blue-600 text-white rounded-lg text-[10px] font-bold flex items-center gap-1 hover:bg-blue-700 transition shadow-lg shadow-blue-200">
-                            {currentStepIndex === steps.length - 1 ? 'Selesai' : 'Lanjut'} <ChevronRight size={14}/>
-                        </button>
+                        
+                        {!step.next_trigger_target ? (
+                            <button onClick={handleNext} className="py-1.5 px-3 bg-blue-600 text-white rounded-lg text-[10px] font-bold flex items-center gap-1 hover:bg-blue-700 transition shadow-lg shadow-blue-200">
+                                {currentStepIndex === steps.length - 1 ? 'Selesai' : 'Lanjut'} <ChevronRight size={14}/>
+                            </button>
+                        ) : (
+                            <div className="flex items-center gap-1 text-[10px] text-blue-600 font-bold bg-blue-50 px-2 py-1 rounded border border-blue-100 animate-pulse">
+                                <MousePointerClick size={12}/> Klik target untuk lanjut
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>
