@@ -79,24 +79,40 @@ export default function DynamicTour() {
   }, [currentStepIndex, steps, targetRect]);
 
   // 3. LOGIC NAVIGASI UTAMA
+  // 3. LOGIC NAVIGASI UTAMA
   useEffect(() => {
     if (!isVisible || steps.length === 0) return;
 
     const currentStep = steps[currentStepIndex];
     const nextStep = steps[currentStepIndex + 1];
+    
+    // Deteksi Mundur
     const isMovingBack = currentStepIndex < lastStepIndex.current;
     lastStepIndex.current = currentStepIndex;
 
+    // Reset Visual
     setTargetRect(null); 
     if (searchInterval.current) clearInterval(searchInterval.current);
 
-    // Auto Advance Navigasi
-    if (!isMovingBack && nextStep && location.pathname === nextStep.route_path && location.pathname !== currentStep.route_path) {
-        setCurrentStepIndex(prev => prev + 1);
-        setIsVideoPlaying(false);
-        return; 
+    // --- PERBAIKAN AUTO ADVANCE ---
+    // Cek apakah kita sudah di halaman yang SALAH untuk step saat ini?
+    const isOnWrongPageForCurrentStep = location.pathname !== currentStep.route_path;
+    
+    // Cek apakah kita SECARA KEBETULAN sudah ada di halaman step berikutnya?
+    const isOnNextPage = nextStep && location.pathname === nextStep.route_path;
+
+    // JANGAN auto-advance kalau kita baru saja mau pindah ke halaman step ini.
+    // Auto-advance cuma boleh jalan kalau kita MEMANG SUDAH di halaman next step dan BUKAN di halaman current step.
+    if (!isMovingBack && nextStep && isOnNextPage && isOnWrongPageForCurrentStep) {
+        // Double check: Jangan lompat kalau route step sekarang dan step depan itu SAMA (beda target di 1 halaman)
+        if (currentStep.route_path !== nextStep.route_path) {
+             setCurrentStepIndex(prev => prev + 1);
+             setIsVideoPlaying(false);
+             return; 
+        }
     }
 
+    // --- EKSEKUSI STEP ---
     const executeStep = () => {
         if (currentStep.pre_click_target && !isMovingBack) {
             runAutoClicker(currentStep.pre_click_target, () => {
@@ -107,9 +123,11 @@ export default function DynamicTour() {
         }
     };
 
+    // Navigasi jika salah halaman (Redirect Paksa)
     if (location.pathname !== currentStep.route_path) {
       navigate(currentStep.route_path);
-      setTimeout(executeStep, 800);
+      // Tunggu navigasi selesai agak lamaan dikit biar gak balapan sama Auto Advance
+      setTimeout(executeStep, 1000); 
     } else {
       executeStep();
     }
